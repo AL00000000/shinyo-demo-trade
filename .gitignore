@@ -1,0 +1,11 @@
+node_modules/
+.expo/
+dist/
+.env
+.env.*
+!.env.example
+*.zip
+dist-web/
+data/
+*.db*
+*.log
