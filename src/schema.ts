@@ -23,7 +23,8 @@ export const quoteSchema = z.object({
   close: positiveAmount.nullable(), finalQuote: positiveAmount.nullable(),
   status: z.enum(['traded', 'quote-only', 'no-price']),
   // 分割・併合等で株数/建値を変更すべき直近の日付。調整後終値で代替しない。
-  actionDate: dateSchema.nullable()
+  actionDate: dateSchema.nullable(),
+  corporateActionsChecked: z.boolean().optional()
 }).superRefine((v, ctx) => {
   if (v.status === 'traded' && v.close === null) ctx.addIssue({ code: 'custom', message: '約定ありなら終値必須' });
   if (v.status === 'quote-only' && v.finalQuote === null) ctx.addIssue({ code: 'custom', message: '気配引けなら最終気配値必須' });
@@ -33,10 +34,13 @@ export const quoteSchema = z.object({
 export const snapshotSchema = z.object({
   version: z.literal(1), source: z.string().min(1).max(200), tradingDate: dateSchema,
   expectedTradingDate: dateSchema, generatedAt: z.iso.datetime(),
-  complete: z.literal(true), licensedForRedistribution: z.literal(true),
+  complete: z.boolean(), licensedForRedistribution: z.boolean(),
+  usage: z.enum(['licensed', 'personal']).optional(),
+  coverageNote: z.string().max(500).optional(),
   markets: z.array(z.enum(['TSE', 'NSE', 'FSE', 'SSE'])).min(1),
   expectedCount: z.number().int().positive(), quotes: z.array(quoteSchema).min(1)
 }).superRefine((v, ctx) => {
+  if (v.usage !== 'personal' && (!v.complete || !v.licensedForRedistribution)) ctx.addIssue({ code: 'custom', message: '一般配信には全件完了と配信許諾が必要です' });
   if (v.tradingDate !== v.expectedTradingDate) ctx.addIssue({ code: 'custom', message: '対象営業日のデータ未到着' });
   if (v.quotes.length !== v.expectedCount) ctx.addIssue({ code: 'custom', message: '全銘柄件数不一致' });
   const keys = v.quotes.map(q => `${q.market}:${q.code}`);

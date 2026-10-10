@@ -1,9 +1,12 @@
 import { pathToFileURL } from 'node:url';
 import { Store } from './store';
 import { fetchLicensedSnapshot } from './provider';
+import { fetchPublicSnapshot } from './public-prices';
 export async function sync(store: Store) {
   try {
-    const snapshot = store.put(await fetchLicensedSnapshot());
+    const snapshot = store.put(await (process.env.PRICE_PROVIDER === 'public-personal'
+      ? fetchPublicSnapshot(process.env.DATA_DIR ?? './data', (count,total) => { if (count % 100 === 0 || count === total) console.log(`終値取得 ${count}/${total}`); }, value => store.put(value))
+      : fetchLicensedSnapshot()));
     store.attempt(null);
     return { date: snapshot.tradingDate, count: snapshot.quotes.length };
   } catch (e) {

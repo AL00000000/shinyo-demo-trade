@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Decimal from 'decimal.js';
 import Slider from './src/PriceSlider';
 import { StressChart } from './src/StressChart';
+import { readAccessKey, saveAccessKey, keyStorageNote, consumeSetupKey } from './src/access-key';
 import { accountSchema, collateralSchema, positionSchema, snapshotSchema, type Account, type Snapshot } from './src/schema';
 import { calculate, todayJst, yen } from './src/engine';
 import { demoPortfolio, demoSnapshot } from './src/demo';
@@ -44,6 +45,8 @@ function Main() {
   const [patternName, setPatternName] = useState('パターン1');
   const [apiDraft, setApiDraft] = useState(''), [backup, setBackup] = useState('');
   const [apiAccessKey, setApiAccessKey] = useState('');
+  const [rememberKey, setRememberKey] = useState(false), [keyLoaded, setKeyLoaded] = useState(false);
+  const keySaveQueue = useRef(Promise.resolve());
   const [change, setChange] = useState('0'), [cashDelta, setCashDelta] = useState('0');
   const [scenario, setScenario] = useState({ changePercent: '0', cashDelta: '0' });
   const [deletePrompt, setDeletePrompt] = useState<string | null>(null);
@@ -58,6 +61,16 @@ function Main() {
   const isScenario = !simulation.error && (scenario.changePercent !== '0' || scenario.cashDelta !== '0');
   const oldCalendar = !demo && snapshot && Date.now() - Date.parse(snapshot.generatedAt) > 30 * 3600_000;
 
+  useEffect(() => {
+    const setupKey = consumeSetupKey();
+    if (setupKey) { setApiAccessKey(setupKey); setNotice('本人用キーを設定しました。設定で「この端末に保存」を選ぶと次回も自動接続できます。'); }
+    readAccessKey().then(value => { if (value && !setupKey) { setApiAccessKey(value); setRememberKey(true); } else if (value === setupKey && value) setRememberKey(true); }).catch(() => setNotice('接続キーを読み込めませんでした。設定で入力してください。')).finally(() => setKeyLoaded(true));
+  }, []);
+  useEffect(() => {
+    if (!keyLoaded) return;
+    if (rememberKey && !/^[A-Za-z0-9_-]{32,256}$/.test(apiAccessKey)) return;
+    keySaveQueue.current = keySaveQueue.current.then(() => saveAccessKey(rememberKey ? apiAccessKey : null)).catch(() => setNotice('接続キーの保存に失敗しました。保存領域を確認してください。'));
+  }, [rememberKey,apiAccessKey,keyLoaded]);
   useEffect(() => {
     (async () => {
       try {
@@ -81,13 +94,21 @@ function Main() {
   useEffect(() => { setPatternName(active.name); }, [active.name, saved.activePattern]);
   useEffect(() => { setApiDraft(saved.apiUrl); }, [saved.apiUrl]);
   const refresh = useCallback(async () => {
-    if (syncLock.current || demo || !saved.apiUrl || !apiAccessKey) return;
+    if (syncLock.current || demo || !/^[A-Za-z0-9_-]{32,256}$/.test(apiAccessKey)) return;
     syncLock.current = true; setBusy(true); const g = generation.current;
     try {
-      const url = new URL(saved.apiUrl);
+      let endpoint = saved.apiUrl;
+      if (!endpoint) {
+        const discovery = await fetch('https://al00000000.github.io/shinyo-demo-trade/api-endpoint.json', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+        if (!discovery.ok) throw new Error('本人用サーバーの接続先を確認できません');
+        const config = await discovery.json();
+        if (typeof config.url !== 'string' || !/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(config.url)) throw new Error('本人用サーバーの接続先が不正です');
+        endpoint = config.url;
+      }
+      const url = new URL(endpoint);
       if (url.protocol !== 'https:' && !(Platform.OS === 'web' && ['localhost', '127.0.0.1'].includes(url.hostname))) throw new Error('公開APIはHTTPSで設定してください');
       if (url.username || url.password || url.search) throw new Error('API URLに認証情報を含めないでください');
-      const response = await fetch(`${saved.apiUrl.replace(/\/$/, '')}/v1/snapshot`, { headers: { Authorization: `Bearer ${apiAccessKey}` }, signal: AbortSignal.timeout(30000) });
+      const response = await fetch(`${endpoint.replace(/\/$/, '')}/v1/snapshot`, { headers: { Authorization: `Bearer ${apiAccessKey}` }, signal: AbortSignal.timeout(30000) });
       if (!response.ok) throw new Error(`終値取得待ち（HTTP ${response.status}）`);
       const data = await response.json();
       const incoming = snapshotSchema.parse(data.snapshot);
@@ -137,6 +158,7 @@ function Main() {
       {notice !== '' && <Pressable onPress={() => setNotice('')}><Text style={s.notice}>{notice} ×</Text></Pressable>}
       {simulation.error && <Text style={s.error}>{simulation.error}</Text>}
       {!demo && (saved.syncError || oldCalendar) && <View style={s.warning}><Text style={s.warningText}>現在の営業日まで更新できているか確認が必要です</Text><Text style={s.body}>{saved.syncError ?? '配信元の生成から30時間以上経過しています' }。表示値は前回取得分の参考値です。</Text></View>}
+      {!demo && snapshot?.coverageNote && <View style={s.warning}><Text style={s.warningText}>本人用の取得範囲</Text><Text style={s.body}>{snapshot.coverageNote}</Text></View>}
       {tab === '状況' && <>
         <View style={s.hero}><Text style={s.heroLabel}>{demo ? 'サンプルの維持率' : '終値ベースの維持率'}</Text><Text style={s.rate}>{result.ratio ?? '—'}<Text style={s.percent}> %</Text></Text><Text style={s.heroBody}>{!result.complete ? '価格未取得 / 計算を保留' : result.ratio === null ? '建玉を登録してください' : result.below20 ? '20%未満 · 追証水準の参考判定' : result.below30 ? '20%以上30%未満' : '30%以上'}</Text><View style={s.heroDivider}/><Text style={s.heroBody}>終値日 {result.date ?? '未取得'} · 評価益は保証金に加算しません</Text></View>
         <Card title="参考指標"><View style={s.grid}><View style={s.tile}><Text style={s.label}>評価益込み維持率</Text><Text style={s.tileValue}>{result.profitInclusiveRatio === null ? "—" : `${result.profitInclusiveRatio}%`}</Text><Text style={s.note}>税率20.315%・表示用</Text></View><View style={s.tile}><Text style={s.label}>実質レバレッジ</Text><Text style={s.tileValue}>{result.effectiveLeverage === null ? "—" : `${result.effectiveLeverage}倍`}</Text><Text style={s.note}>総ポジション ÷ 税引前純資産</Text></View></View><Row label="純資産（登録分・税引前）" value={amount(result.netAssets)}/><Row label="総ポジション時価" value={amount(result.totalExposure)}/><Text style={s.note}>評価益込み維持率は通算評価益から20.315%の税金相当額を控除。実質レバレッジの純資産は税引前です。登録した現金・代用株・信用建玉から算出します。代用株は掛目前の時価、売建玉も正の時価で合算。純資産が0以下ならレバレッジは未算出です。追証判定にはSBI基準の維持率を使います。</Text></Card><Card title="各リストの信用維持率">{comparisons.map(p => <Row key={p.id} label={`${p.name} · 建玉${p.account.positions.length}件`} value={p.result.ratio === null ? '未算出' : `${p.result.ratio}%`} strong={p.id === active.id}/>)}</Card>
@@ -144,7 +166,7 @@ function Main() {
         <View style={s.grid}><View style={s.tile}><Text style={s.label}>実質保証金</Text><Text style={s.tileValue}>{amount(result.effective)}</Text></View><View style={s.tile}><Text style={s.label}>建玉代金 · 建値基準</Text><Text style={s.tileValue}>{amount(result.notional)}</Text></View></View>
         <Card title="保証金の内訳"><Row label="現金" value={amount(result.cash)} /><Row label="代用株の評価額" value={amount(result.collateralValue)} /><Row label="建玉の評価損益（通算）" value={amount(result.pnl)} /><Row label="保証金から差し引く評価損" value={amount(result.deduction)} /><Row label="諸経費" value={amount(result.costs)} /><Row label="受渡前の決済損益" value={amount(result.unsettled)} /><Row strong label="20%までの余裕 / 不足（−）" value={amount(result.buffer)} /><Row label="20%回復に必要な現金（概算）" value={amount(result.gap)} /><Text style={s.note}>過去に発生した追証は、株価が回復しても自動で解消されません。上の金額は現在の率を20%へ戻す試算です。</Text>{result.depositBelowMinimum && <Text style={s.note}>差入保証金（現金＋代用評価額）が30万円未満です。最低保証金の条件は口座で確認してください。</Text>}</Card>
         <Card title="株価変動と追証ライン"><Text style={s.body}>全建玉と代用株の価格を同じ割合で動かします。売建玉は価格上昇で損失になります。</Text><Row label="株価変動率" value={`${scenario.changePercent}%`} strong/><Slider accessibilityLabel="株価変動率スライダー" minimumValue={-50} maximumValue={30} step={1} value={Math.max(-50, Math.min(30, Number(scenario.changePercent)))} onValueChange={slideScenario} minimumTrackTintColor="#66cee5" maximumTrackTintColor="#344258" thumbTintColor="#d6f5ff"/><StressChart account={account} snapshot={snapshot} changePercent={scenario.changePercent} cashDelta={scenario.cashDelta}/><View style={s.chips}>{['-20', '-10', '-5', '0', '5', '10'].map(v => <Pressable key={v} style={s.chip} onPress={() => setChange(v)}><Text style={s.chipText}>{v}%</Text></Pressable>)}</View><Field label="価格変化率（%）" numeric value={change} onChange={setChange} /><Field label="現金の入出金（円・出金はマイナス）" numeric value={cashDelta} onChange={setCashDelta} /><Button title="この条件で試算" onPress={applyScenario}/>{isScenario && <View style={s.scenario}><Text style={s.cardTitle}>仮定：価格 {scenario.changePercent}% / 入出金 {yen(scenario.cashDelta)}</Text><Row label="試算した維持率" value={simulated.ratio === null ? '未算出' : `${simulated.ratio}%`} strong/><Row label="評価益込み維持率（税引後・参考）" value={simulated.profitInclusiveRatio === null ? "未算出" : `${simulated.profitInclusiveRatio}%`}/><Row label="実質レバレッジ（参考）" value={simulated.effectiveLeverage === null ? "未算出" : `${simulated.effectiveLeverage}倍`}/><Row label="純資産（登録分）" value={amount(simulated.netAssets)}/><Row label="実質保証金" value={amount(simulated.effective)}/><Row label="20%回復に必要な現金" value={amount(simulated.gap)}/><Button title="仮定を解除" secondary onPress={() => { setScenario({ changePercent: '0', cashDelta: '0' }); setChange('0'); setCashDelta('0'); }}/></View>}</Card>
-        <Button title={busy ? '終値を取得中…' : '終値を更新'} disabled={busy || demo || !saved.apiUrl || !apiAccessKey} onPress={() => void refresh()} /><Text style={s.note}>サーバーはアプリを閉じていても日次取得します。端末の表示は起動時・復帰時と、利用中の15分ごとの通信で更新します。</Text>
+        <Button title={busy ? '終値を取得中…' : '終値を更新'} disabled={busy || demo || !apiAccessKey} onPress={() => void refresh()} /><Text style={s.note}>サーバーはアプリを閉じていても日次取得します。端末の表示は起動時・復帰時と、利用中の15分ごとの通信で更新します。</Text>
       </>}
       {tab === '建玉・代用' && <>
         <Card title="このパターンの名前"><Field label="パターン名" value={patternName} onChange={setPatternName}/><Button title="名前を保存" disabled={demo} onPress={() => {
@@ -169,22 +191,22 @@ function Main() {
         <Card title="⑤ 評価益込み維持率（税引後・参考）"><Text selectable style={s.formula}>税金相当額 ＝ max(0, 通算評価損益) × 20.315% ＝ {exact(result.estimatedProfitTax)}{ "\n" }税引後評価損益 ＝ {exact(result.pnl)} − {exact(result.estimatedProfitTax)} ＝ {exact(result.afterTaxPnl)}{ "\n" }評価益込み保証金 ＝ 現金 ＋ 代用評価額 − 諸経費 ＋ 受渡前決済損益 ＋ 税引後評価損益{ "\n" }{exact(result.cash)} ＋ {exact(result.collateralValue)} − {exact(result.costs)} ＋ ({exact(result.unsettled)}) ＋ ({exact(result.afterTaxPnl)}) ＝ {exact(result.profitInclusiveMargin)}{ "\n" }{exact(result.profitInclusiveMargin)} ÷ {exact(result.notional)} × 100 ＝ {result.profitInclusiveRatio === null ? "未算出" : `${result.profitInclusiveRatio}%`}</Text><Text style={s.note}>通算がプラスなら税率20.315%を控除した利益、マイナスなら損失全額を反映します。未決済の含み益に実際に課税した額ではなく、決済時を想定した概算です。年間の損益通算・繰越控除、費用の税務上の控除、税額の端数処理は再現しません。追証・新規建余力の判定には使用しません。</Text></Card><Card title="⑥ 実質レバレッジ（参考）">{result.collaterals.map(c => <Text key={c.id} selectable style={s.formula}>現物 {c.code}: {exact(c.marketPrice)} × {c.quantity.toLocaleString()}株 ＝ {exact(c.marketValue)}（掛目前）</Text>)}{result.positions.map(p => <Text key={p.id} selectable style={s.formula}>信用 {p.code} {p.side === "buy" ? "買建" : "売建"}: {exact(p.price)} × {p.quantity.toLocaleString()}株 ＝ {exact(p.marketValue)}</Text>)}<Text selectable style={s.formula}>総ポジション ＝ 現物時価 ＋ 信用建玉時価{ "\n" }{exact(result.spotMarketValue)} ＋ {exact(result.positionMarketValue)} ＝ {exact(result.totalExposure)}{ "\n" }純資産 ＝ 現金 ＋ 現物時価 − 諸経費 ＋ 受渡前決済損益 ＋ 通算評価損益{ "\n" }{exact(result.cash)} ＋ {exact(result.spotMarketValue)} − {exact(result.costs)} ＋ ({exact(result.unsettled)}) ＋ ({exact(result.pnl)}) ＝ {exact(result.netAssets)}{ "\n" }実質レバレッジ ＝ {exact(result.totalExposure)} ÷ {exact(result.netAssets)} ＝ {result.effectiveLeverage === null ? "未算出" : `${result.effectiveLeverage}倍`}</Text><Text style={s.note}>参考元と同じ、買建・売建を相殺しない総時価による定義です。買いと売りが混在するため、この倍率を一律の株価変動率に掛けても純資産の変化率とは一致しません。現物時価は代用登録分のみで、口座外の資産は含めません。純資産が0以下なら倍率は定義しません。</Text></Card><Card title="公式の説明"><Button title="SBI · 委託保証金率の計算式" secondary onPress={() => void Linking.openURL('https://search.sbisec.co.jp/v2/popwin/help/trade_stock_11_03.html')}/><Button title="SBI · 代用株と信用建余力" secondary onPress={() => void Linking.openURL('https://search.sbisec.co.jp/v2/popwin/help/manage_07_01.html')}/><Button title="SBI · 追証のルール" secondary onPress={() => void Linking.openURL('https://search.sbisec.co.jp/v2/popwin/help/trade_stock_11_04.html')}/><Text style={s.note}>確認日：2026-10-10。受渡日の資金移動・拘束資金・増担保規制・口座固有の条件は別途確認が必要です。表示は終値での試算で、SBIが確定する追証金額とは区別しています。</Text></Card>
       </>}
       {tab === '設定' && <>
-        <Card title="終値データの接続"><Field label="終値APIのHTTPS URL" value={apiDraft} onChange={setApiDraft} placeholder="https://prices.example.jp"/><View style={s.field}><Text style={s.label}>本人用の接続キー</Text><TextInput accessibilityLabel="本人用の接続キー" secureTextEntry autoCapitalize="none" autoCorrect={false} style={s.input} value={apiAccessKey} onChangeText={setApiAccessKey}/><Text style={s.note}>自分の終値サーバーのAPI_ACCESS_TOKENを入力します。キーは端末へ保存せず、アプリを開き直したら再入力します。</Text></View><Button title="接続先を保存" onPress={() => {
-          try { const u = new URL(apiDraft); if (u.protocol !== 'https:' && !(Platform.OS === 'web' && ['localhost', '127.0.0.1'].includes(u.hostname))) throw new Error(); if (u.username || u.password || u.search || u.hash) throw new Error(); generation.current++; setSaved(v => ({ ...v, apiUrl: apiDraft.replace(/\/$/, ''), snapshot: null, syncError: null, syncedAt: null })); setNotice('接続先を保存しました'); }
+        <Card title="終値データの接続"><Field label="終値APIのHTTPS URL（空欄で自動接続）" value={apiDraft} onChange={setApiDraft} placeholder="空欄で本人用サーバーへ自動接続"/><View style={s.field}><Text style={s.label}>本人用の接続キー</Text><TextInput accessibilityLabel="本人用の接続キー" secureTextEntry autoCapitalize="none" autoCorrect={false} style={s.input} value={apiAccessKey} onChangeText={setApiAccessKey}/><Pressable accessibilityRole="checkbox" accessibilityLabel="この端末に接続キーを保存" accessibilityState={{ checked: rememberKey }} onPress={() => setRememberKey(v => !v)} style={{ paddingVertical: 12 }}><Text style={s.body}>{rememberKey ? '☑' : '☐'} この端末に接続キーを保存</Text></Pressable><Text style={s.note}>{keyStorageNote} 保存しない場合は開き直したときに再入力します。</Text></View><Button title="接続先を保存" onPress={() => {
+          try { if (!apiDraft.trim()) { generation.current++; setSaved(v => ({ ...v, apiUrl: '', snapshot: null, syncError: null, syncedAt: null })); setNotice('本人用サーバーへ自動接続します'); return; } const u = new URL(apiDraft); if (u.protocol !== 'https:' && !(Platform.OS === 'web' && ['localhost', '127.0.0.1'].includes(u.hostname))) throw new Error(); if (u.username || u.password || u.search || u.hash) throw new Error(); generation.current++; setSaved(v => ({ ...v, apiUrl: apiDraft.replace(/\/$/, ''), snapshot: null, syncError: null, syncedAt: null })); setNotice('接続先を保存しました'); }
           catch { setNotice('認証情報を含まないHTTPS URLを入力してください'); }
-        }}/><Row label="データ提供元" value={snapshot?.source ?? '未接続'}/><Row label="終値日" value={snapshot?.tradingDate ?? '未取得'}/><Row label="配信元の生成時刻" value={snapshot ? new Date(snapshot.generatedAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '—'}/><Row label="端末の最終取得" value={saved.syncedAt ? new Date(saved.syncedAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '—'}/><Text style={s.note}>自分の終値サーバーから本人用キーで取得します。株価データや接続キーをGitHubへ公開しないでください。取得元の個人利用条件を確認し、サーバーを設定する必要があります。現在は未接続です。</Text></Card>
+        }}/><Row label="データ提供元" value={snapshot?.source ?? '未接続'}/><Row label="終値日" value={snapshot?.tradingDate ?? '未取得'}/><Row label="配信元の生成時刻" value={snapshot ? new Date(snapshot.generatedAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '—'}/><Row label="端末の最終取得" value={saved.syncedAt ? new Date(saved.syncedAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '—'}/><Text style={s.note}>自分の終値サーバーから本人用キーで取得します。株価データや接続キーをGitHubへ公開しないでください。API URLが空欄なら、このPCの本人用サーバーへ自動接続します。このPCの起動とインターネット接続が必要です。無料取得は東証を対象とし、地方単独上場銘柄等は未対応です。</Text></Card>
         <Card title="操作を試す"><Button title="架空のサンプルを表示" secondary onPress={() => { setDemo(true); setTab('状況'); setScenario({ changePercent: '0', cashDelta: '0' }); }}/><Text style={s.note}>サンプルはご自身の建玉に保存されません。</Text></Card>
         <Card title="バックアップ"><Text style={s.body}>3パターンすべての建玉・保証金をバックアップします。金額が含まれます。旧形式のJSONは選択中のパターンだけに復元します。</Text><Button title="JSONバックアップを作成" secondary onPress={() => setBackup(JSON.stringify({ version: 2, patterns: saved.patterns, activePattern: saved.activePattern }, null, 2))}/><TextInput accessibilityLabel="バックアップJSON" style={[s.input, { minHeight: 140, textAlignVertical: 'top' }]} multiline value={backup} onChangeText={setBackup} placeholder="復元するJSONを貼り付け"/><Button title="バックアップを共有" secondary disabled={!backup} onPress={() => { void Share.share({ message: backup }).catch(() => setNotice('JSONを選択してコピーしてください')); }}/><Button title="JSONの内容で復元" disabled={!backup} onPress={() => setDeletePrompt('restore')}/></Card>
         <Card title="データとプライバシー"><Text style={s.body}>証券口座へログインせず、注文も発注しません。入力した建玉・保証金は端末内に保存し、株価サーバーへ送信しません。株価APIへの通信時にはサーバーにIPアドレス等の通信情報が届きます。</Text><Button title="端末の入力をすべて削除" secondary onPress={() => setDeletePrompt('all')}/></Card>
       </>}
-      <Text style={s.footer}>信用デモ取引 · v1.3.0{ '\n' }SBI基準の終値シミュレーション</Text>
+      <Text style={s.footer}>信用デモ取引 · v1.4.0{ '\n' }SBI基準の終値シミュレーション</Text>
     </ScrollView>
     <View style={s.patternDock}><View style={s.patternSwitch}>
       {patterns.map((p, index) => <React.Fragment key={p.id}>{index > 0 && <Text style={s.patternSeparator}>·</Text>}<Pressable accessibilityRole="button" accessibilityLabel={`${p.name}を選択`} accessibilityState={{ selected: saved.activePattern === index }} onPress={() => selectPattern(index)} style={s.patternMiniButton}><Text style={[s.patternMiniText, saved.activePattern === index && s.patternMiniActive]}>{index + 1}</Text></Pressable></React.Fragment>)}
     </View></View>
     {editor && <Editor kind={editor.kind} index={editor.index} account={account} snapshot={snapshot} onClose={() => setEditor(null)} onSave={next => { editAccount(next); setEditor(null); }}/ >}
     <Modal visible={deletePrompt !== null} transparent animationType="fade" onRequestClose={() => setDeletePrompt(null)}><View style={s.modalShade}><View style={s.dialog}><Text style={s.cardTitle}>{deletePrompt === 'all' ? '入力をすべて削除しますか' : '入力をJSONの内容で置き換えますか'}</Text><Text style={s.body}>3パターン形式の復元・全削除は全リストが対象です。旧形式の復元は選択中のリストだけが対象です。必要なら先にバックアップしてください。</Text><Button title="実行する" onPress={() => {
-      try { const next = deletePrompt === 'all' ? createPortfolio() : restorePortfolio(JSON.parse(backup), saved); setSaved(v => ({ ...v, ...next })); setScenario({ changePercent: '0', cashDelta: '0' }); setDemo(false); setStorageError(''); setNotice('入力データを更新しました'); } catch { setNotice('バックアップJSONの形式が不正です'); } setDeletePrompt(null);
+      try { if (deletePrompt === 'all') { setRememberKey(false); setApiAccessKey(''); } const next = deletePrompt === 'all' ? createPortfolio() : restorePortfolio(JSON.parse(backup), saved); setSaved(v => ({ ...v, ...next })); setScenario({ changePercent: '0', cashDelta: '0' }); setDemo(false); setStorageError(''); setNotice('入力データを更新しました'); } catch { setNotice('バックアップJSONの形式が不正です'); } setDeletePrompt(null);
     }}/><Button title="キャンセル" secondary onPress={() => setDeletePrompt(null)}/></View></View></Modal>
   </SafeAreaView>;
 }

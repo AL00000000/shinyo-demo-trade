@@ -24,7 +24,7 @@ const server = createServer((req, res) => {
   if (!authorized(req.headers.authorization, accessToken)) { res.writeHead(401); return res.end(JSON.stringify({ error: '本人用の接続キーが必要です' })); }
   if (req.method !== 'GET') { res.writeHead(405); return res.end('{}'); }
   const path = new URL(req.url ?? '/', 'http://localhost').pathname;
-  if (path === '/health') return res.end(JSON.stringify({ ok: true, configured: process.env.DATA_LICENSE_CONFIRMED === 'true', ...store.status() }));
+  if (path === '/health') return res.end(JSON.stringify({ ok: true, configured: process.env.PRICE_PROVIDER === 'public-personal' || process.env.DATA_LICENSE_CONFIRMED === 'true', ...store.status() }));
   if (path === '/v1/snapshot') {
     const snapshot = store.latest();
     if (!snapshot) { res.writeHead(503); return res.end(JSON.stringify({ error: '終値データ未取得', ...store.status() })); }

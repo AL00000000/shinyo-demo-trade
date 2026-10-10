@@ -1,5 +1,7 @@
 import { snapshotSchema, type Snapshot } from '../src/schema';
+import { fetchPublicSnapshot } from './public-prices';
 export async function fetchLicensedSnapshot(): Promise<Snapshot> {
+  if (process.env.PRICE_PROVIDER === 'public-personal') return fetchPublicSnapshot(process.env.DATA_DIR ?? './data', (count,total) => { if (count % 100 === 0 || count === total) console.log(`終値取得 ${count}/${total}`); });
   if (process.env.DATA_LICENSE_CONFIRMED !== 'true') throw new Error('株価データのアプリ配信契約が未設定です');
   const rawUrl = process.env.LICENSED_FEED_URL;
   if (!rawUrl || new URL(rawUrl).protocol !== 'https:') throw new Error('契約済み配信元のHTTPS URLが必要です');

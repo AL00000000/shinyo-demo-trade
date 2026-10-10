@@ -27,6 +27,7 @@ export function calculate(input: Account, snapshot: Snapshot | null, scenario: S
   function get(code: string, confirmedThrough: string, collateral: boolean) {
     const q = snapshot && findQuote(snapshot, code);
     if (!q) { issues.push(`${code}: 終値未取得`); return null; }
+    if (q.corporateActionsChecked === false && confirmedThrough < q.date) { issues.push(`${code}: 権利処理履歴が未確認です。${q.date}までの株数・建値を確認してください`); return null; }
     if (q.actionDate && q.actionDate > confirmedThrough) { issues.push(`${code}: ${q.actionDate}の権利処理後の株数・建値を確認してください`); return null; }
     if (q.status === 'no-price' || (q.close === null && q.finalQuote === null)) { issues.push(`${code}: 価格なし`); return null; }
     // SBI: 代用が気配引けの場合、最終約定値と最終気配値の低い方。
