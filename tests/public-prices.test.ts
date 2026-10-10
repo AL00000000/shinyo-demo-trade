@@ -12,6 +12,7 @@ test('祝日・週末・18時前・年末年始を営業日判定から除く',(
  assert.equal(expectedDate(new Date('2027-01-03T12:00:00Z'),new Set()),'2026-12-30');
 });
 const chart=(date:string,close:number,volume=100)=>({chart:{result:[{
+ meta:{currency:'JPY',symbol:'7203.T'},
  timestamp:[Date.parse(`${date}T00:00:00Z`)/1000],
  indicators:{quote:[{close:[close],volume:[volume]}]},
  events:{splits:{a:{date:Date.parse('2026-10-01T00:00:00Z')/1000}}}
@@ -21,6 +22,14 @@ test('当日のcloseだけを使い、調整後終値や古い価格を混ぜな
  assert.equal(q.close,'2910.5'); assert.equal(q.actionDate,'2026-10-01');
  assert.throws(()=>parseChart(chart('2026-10-08',2910.5),{code:'7203',name:''},'2026-10-09'));
  assert.throws(()=>parseChart(chart('2026-10-09',2910.5,0),{code:'7203',name:''},'2026-10-09'));
+});
+test('円建ての銘柄一致を確認し日足JSONの小数誤差を除く',()=>{
+ const payload=chart('2026-10-09',1234.699951171875);
+ assert.equal(parseChart(payload,{code:'7203',name:''},'2026-10-09').close,'1234.7');
+ payload.chart.result[0].meta.currency='USD';
+ assert.throws(()=>parseChart(payload,{code:'7203',name:''},'2026-10-09'));
+ payload.chart.result[0].meta.currency='JPY';
+ assert.throws(()=>parseChart(payload,{code:'6758',name:''},'2026-10-09'));
 });
 test('本人用は未取得を明示できるが一般配信の許諾を偽らない',()=>{
  assert.equal(snapshotSchema.safeParse({...demoSnapshot,complete:false,licensedForRedistribution:false}).success,false);

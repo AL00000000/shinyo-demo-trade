@@ -56,10 +56,11 @@ async function securities(dir: string): Promise<Security[]> {
 export function parseChart(payload: any, security: Security, target: string): Quote {
   const result = payload?.chart?.result?.[0];
   if (!result || payload?.chart?.error) throw new Error('価格レスポンスなし');
+  if (result.meta?.currency !== 'JPY' || result.meta?.symbol !== `${security.code}.T`) throw new Error('通貨または銘柄が不一致');
   const timestamps: number[] = result.timestamp ?? [], prices = result.indicators?.quote?.[0]?.close ?? [], volumes = result.indicators?.quote?.[0]?.volume ?? [];
   let close: string | null = null;
   for (let i = 0; i < timestamps.length; i++) {
-    if (jstDate(new Date(timestamps[i] * 1000)) === target && Number.isFinite(prices[i]) && prices[i] > 0 && volumes[i] > 0) close = String(Number(Number(prices[i]).toFixed(6)));
+    if (jstDate(new Date(timestamps[i] * 1000)) === target && Number.isFinite(prices[i]) && prices[i] > 0 && volumes[i] > 0) close = String(Number(Number(prices[i]).toFixed(2)));
   }
   // 別日の価格やregularMarketPriceを終値へ流用しない。
   if (close === null) throw new Error('対象営業日の終値なし');
@@ -93,6 +94,10 @@ export async function fetchPublicSnapshot(dir: string, onProgress?: (count: numb
     } catch { /* 既存キャッシュがなければ直接取得 */ }
   }
   let cursor = 0, done = 0, blocked = false;
+  // 日足JSONの浮動小数点誤差を計算へ持ち込まない（東証の呼値は最小0.1円）。
+  for (const quote of Object.values(cache)) {
+    if (quote.date === target && quote.close && Number.isFinite(Number(quote.close))) quote.close = String(Number(Number(quote.close).toFixed(2)));
+  }
   const quotes: (Quote | undefined)[] = master.map(s => cache[s.code]?.date === target && cache[s.code]?.close ? cache[s.code] : undefined);
   function buildSnapshot() {
     const rows = master.map((security, i) => quotes[i] ?? {...security, market:'TSE', date:target, close:null, finalQuote:null, status:'no-price', actionDate:null});

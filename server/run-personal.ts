@@ -23,7 +23,7 @@ function publish(url: string) {
     writeFileSync(join(pages!, 'api-endpoint.json'), JSON.stringify({version:1, url, updatedAt:new Date().toISOString()}));
     const git = (args: string[]) => execFileSync('git',args,{cwd:pages!,windowsHide:true,stdio:'pipe'});
     git(['add','api-endpoint.json']);
-    git(['commit','-m','Update personal API connection address']);
+    if (git(['diff','--cached','--name-only']).toString().trim()) git(['commit','-m','Update personal API connection address']);
     git(['push','origin','gh-pages']);
     writeFileSync(join(runtimeDir!, 'api-url.txt'), url);
     lastPublished = url; log(`本人用API接続先を更新: ${url}\n`);
