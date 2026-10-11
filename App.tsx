@@ -7,7 +7,7 @@ import Slider from './src/PriceSlider';
 import { StressChart } from './src/StressChart';
 import { readAccessKey, saveAccessKey, keyStorageNote, consumeSetupKey } from './src/access-key';
 import { accountSchema, collateralSchema, positionSchema, snapshotSchema, type Account, type Snapshot } from './src/schema';
-import { calculate, todayJst, yen } from './src/engine';
+import { calculate, findQuote, todayJst, yen } from './src/engine';
 import { demoPortfolio, demoSnapshot } from './src/demo';
 import { createPortfolio, readPortfolio, restorePortfolio, patternSchema, updatePatternAccount, type Portfolio } from './src/patterns';
 
@@ -38,10 +38,12 @@ const id = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 export default function App() { return <SafeAreaProvider><Main /></SafeAreaProvider>; }
 function Main() {
   const [saved, setSaved] = useState<Saved>(init), [loaded, setLoaded] = useState(false);
-  const [tab, setTab] = useState<Tab>('状況'), [demo, setDemo] = useState(false), [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<Tab>('建玉・代用'), [demo, setDemo] = useState(false), [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(''), [storageError, setStorageError] = useState('');
   const [editor, setEditor] = useState<{ kind: 'position' | 'collateral'; index: number | null } | null>(null);
   const [money, setMoney] = useState({ cash: '0', costs: '0', unsettled: '0' });
+  const [extraPatterns, setExtraPatterns] = useState(false);
+  const mainScroll = useRef<ScrollView>(null);
   const [patternName, setPatternName] = useState('パターン1');
   const [apiDraft, setApiDraft] = useState(''), [backup, setBackup] = useState('');
   const [apiAccessKey, setApiAccessKey] = useState('');
@@ -77,7 +79,7 @@ function Main() {
         const raw = await AsyncStorage.getItem(KEY);
         if (raw) {
           const value = JSON.parse(raw);
-          const restored: Saved = { ...init, ...readPortfolio(value), snapshot: value.snapshot ? snapshotSchema.parse(value.snapshot) : null,
+          const restored: Saved = { ...init, ...readPortfolio(value), activePattern: 0, snapshot: value.snapshot ? snapshotSchema.parse(value.snapshot) : null,
             apiUrl: typeof value.apiUrl === 'string' ? value.apiUrl : '', syncedAt: typeof value.syncedAt === 'string' ? value.syncedAt : null, syncError: typeof value.syncError === 'string' ? value.syncError : null };
           setSaved(restored);
         }
@@ -93,6 +95,7 @@ function Main() {
   useEffect(() => { setMoney({ cash: account.cash, costs: account.costs, unsettled: account.unsettled }); }, [account]);
   useEffect(() => { setPatternName(active.name); }, [active.name, saved.activePattern]);
   useEffect(() => { setApiDraft(saved.apiUrl); }, [saved.apiUrl]);
+  useEffect(() => { mainScroll.current?.scrollTo({y:0,animated:false}); }, [tab,saved.activePattern]);
   const refresh = useCallback(async () => {
     if (syncLock.current || demo || !/^[A-Za-z0-9_-]{32,256}$/.test(apiAccessKey)) return;
     syncLock.current = true; setBusy(true); const g = generation.current;
@@ -150,18 +153,18 @@ function Main() {
   if (!loaded) return <SafeAreaView style={s.safe}><ActivityIndicator color="#2f6fe4" /></SafeAreaView>;
   return <SafeAreaView style={s.safe}>
     <View style={s.header}><View><Text style={s.eyebrow}>MARGIN NOTE / SBI基準</Text><Text style={s.title}>信用デモ取引</Text></View><Text style={s.tag}>終値で計算</Text></View>
-    <View style={s.tabs}>{(['状況', '建玉・代用', '途中式', '設定'] as Tab[]).map(t => <Pressable key={t} accessibilityRole="tab" accessibilityState={{ selected: t === tab }} onPress={() => setTab(t)} style={[s.tab, t === tab && s.activeTab]}><Text style={[s.tabText, t === tab && s.activeTabText]}>{t}</Text></Pressable>)}</View>
-    <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
+    <View style={s.tabs}>{(['建玉・代用', '状況', '途中式', '設定'] as Tab[]).map(t => <Pressable key={t} accessibilityRole="tab" accessibilityState={{ selected: t === tab }} onPress={() => setTab(t)} style={[s.tab, t === tab && s.activeTab]}><Text style={[s.tabText, t === tab && s.activeTabText]}>{t === '建玉・代用' ? '銘柄' : t === '状況' ? '維持率' : t}</Text></Pressable>)}</View>
+    <ScrollView ref={mainScroll} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
       {demo && <View style={s.warning}><Text style={s.warningText}>サンプル表示 · 全価格は架空です</Text><Button title="サンプルを終了" secondary onPress={() => { setDemo(false); setScenario({ changePercent: '0', cashDelta: '0' }); }} /></View>}
-      <Text style={s.activePatternNote}>{active.name}</Text>
+      {saved.activePattern !== 0 && <Text style={s.activePatternNote}>{active.name}</Text>}
       {storageError !== '' && <Text style={s.error}>{storageError}</Text>}
-      {notice !== '' && <Pressable onPress={() => setNotice('')}><Text style={s.notice}>{notice} ×</Text></Pressable>}
+      {tab !== '建玉・代用' && notice !== '' && <Pressable onPress={() => setNotice('')}><Text style={s.notice}>{notice} ×</Text></Pressable>}
       {simulation.error && <Text style={s.error}>{simulation.error}</Text>}
-      {!demo && (saved.syncError || oldCalendar) && <View style={s.warning}><Text style={s.warningText}>現在の営業日まで更新できているか確認が必要です</Text><Text style={s.body}>{saved.syncError ?? '配信元の生成から30時間以上経過しています' }。表示値は前回取得分の参考値です。</Text></View>}
-      {!demo && snapshot?.coverageNote && <View style={s.warning}><Text style={s.warningText}>本人用の取得範囲</Text><Text style={s.body}>{snapshot.coverageNote}</Text></View>}
+      {tab !== '建玉・代用' && !demo && (saved.syncError || oldCalendar) && <View style={s.warning}><Text style={s.warningText}>現在の営業日まで更新できているか確認が必要です</Text><Text style={s.body}>{saved.syncError ?? '配信元の生成から30時間以上経過しています' }。表示値は前回取得分の参考値です。</Text></View>}
+      {tab === '設定' && !demo && snapshot?.coverageNote && <View style={s.warning}><Text style={s.warningText}>本人用の取得範囲</Text><Text style={s.body}>{snapshot.coverageNote}</Text></View>}
       {tab === '状況' && <>
         <View style={s.hero}><Text style={s.heroLabel}>{demo ? 'サンプルの維持率' : '終値ベースの維持率'}</Text><Text style={s.rate}>{result.ratio ?? '—'}<Text style={s.percent}> %</Text></Text><Text style={s.heroBody}>{!result.complete ? '価格未取得 / 計算を保留' : result.ratio === null ? '建玉を登録してください' : result.below20 ? '20%未満 · 追証水準の参考判定' : result.below30 ? '20%以上30%未満' : '30%以上'}</Text><View style={s.heroDivider}/><Text style={s.heroBody}>終値日 {result.date ?? '未取得'} · 評価益は保証金に加算しません</Text></View>
-        <Card title="参考指標"><View style={s.grid}><View style={s.tile}><Text style={s.label}>評価益込み維持率</Text><Text style={s.tileValue}>{result.profitInclusiveRatio === null ? "—" : `${result.profitInclusiveRatio}%`}</Text><Text style={s.note}>税率20.315%・表示用</Text></View><View style={s.tile}><Text style={s.label}>実質レバレッジ</Text><Text style={s.tileValue}>{result.effectiveLeverage === null ? "—" : `${result.effectiveLeverage}倍`}</Text><Text style={s.note}>総ポジション ÷ 税引前純資産</Text></View></View><Row label="純資産（登録分・税引前）" value={amount(result.netAssets)}/><Row label="総ポジション時価" value={amount(result.totalExposure)}/><Text style={s.note}>評価益込み維持率は通算評価益から20.315%の税金相当額を控除。実質レバレッジの純資産は税引前です。登録した現金・代用株・信用建玉から算出します。代用株は掛目前の時価、売建玉も正の時価で合算。純資産が0以下ならレバレッジは未算出です。追証判定にはSBI基準の維持率を使います。</Text></Card><Card title="各リストの信用維持率">{comparisons.map(p => <Row key={p.id} label={`${p.name} · 建玉${p.account.positions.length}件`} value={p.result.ratio === null ? '未算出' : `${p.result.ratio}%`} strong={p.id === active.id}/>)}</Card>
+        <Card title="参考指標"><View style={s.grid}><View style={s.tile}><Text style={s.label}>評価益込み維持率</Text><Text style={s.tileValue}>{result.profitInclusiveRatio === null ? "—" : `${result.profitInclusiveRatio}%`}</Text><Text style={s.note}>税率20.315%・表示用</Text></View><View style={s.tile}><Text style={s.label}>実質レバレッジ</Text><Text style={s.tileValue}>{result.effectiveLeverage === null ? "—" : `${result.effectiveLeverage}倍`}</Text><Text style={s.note}>総ポジション ÷ 税引前純資産</Text></View></View><Row label="純資産（登録分・税引前）" value={amount(result.netAssets)}/><Row label="総ポジション時価" value={amount(result.totalExposure)}/><Text style={s.note}>評価益込み維持率は通算評価益から20.315%の税金相当額を控除。実質レバレッジの純資産は税引前です。登録した現金・代用株・信用建玉から算出します。代用株は掛目前の時価、売建玉も正の時価で合算。純資産が0以下ならレバレッジは未算出です。追証判定にはSBI基準の維持率を使います。</Text></Card>
         {!result.complete && <Card title="計算を保留した理由">{result.issues.map(i => <Text key={i} style={s.error}>{i}</Text>)}</Card>}
         <View style={s.grid}><View style={s.tile}><Text style={s.label}>実質保証金</Text><Text style={s.tileValue}>{amount(result.effective)}</Text></View><View style={s.tile}><Text style={s.label}>建玉代金 · 建値基準</Text><Text style={s.tileValue}>{amount(result.notional)}</Text></View></View>
         <Card title="保証金の内訳"><Row label="現金" value={amount(result.cash)} /><Row label="代用株の評価額" value={amount(result.collateralValue)} /><Row label="建玉の評価損益（通算）" value={amount(result.pnl)} /><Row label="保証金から差し引く評価損" value={amount(result.deduction)} /><Row label="諸経費" value={amount(result.costs)} /><Row label="受渡前の決済損益" value={amount(result.unsettled)} /><Row strong label="20%までの余裕 / 不足（−）" value={amount(result.buffer)} /><Row label="20%回復に必要な現金（概算）" value={amount(result.gap)} /><Text style={s.note}>過去に発生した追証は、株価が回復しても自動で解消されません。上の金額は現在の率を20%へ戻す試算です。</Text>{result.depositBelowMinimum && <Text style={s.note}>差入保証金（現金＋代用評価額）が30万円未満です。最低保証金の条件は口座で確認してください。</Text>}</Card>
@@ -169,18 +172,24 @@ function Main() {
         <Button title={busy ? '終値を取得中…' : '終値を更新'} disabled={busy || demo || !apiAccessKey} onPress={() => void refresh()} /><Text style={s.note}>サーバーはアプリを閉じていても日次取得します。端末の表示は起動時・復帰時と、利用中の15分ごとの通信で更新します。</Text>
       </>}
       {tab === '建玉・代用' && <>
-        <Card title="このパターンの名前"><Field label="パターン名" value={patternName} onChange={setPatternName}/><Button title="名前を保存" disabled={demo} onPress={() => {
-          try { const renamed = patternSchema.parse({ ...active, name: patternName }); setSaved(v => ({ ...v, patterns: v.patterns.map((p, i) => i === v.activePattern ? renamed : p) })); setNotice('パターン名を保存しました'); }
-          catch { setNotice('パターン名は1〜30文字で入力してください'); }
-        }}/></Card>
-        <Card title="保証金・費用（円）"><Field label="委託保証金現金" numeric value={money.cash} onChange={cash => setMoney(v => ({ ...v, cash }))}/><Field label="支払諸経費の合計" numeric value={money.costs} onChange={costs => setMoney(v => ({ ...v, costs }))}/><Field label="受渡未到来の決済損益（損はマイナス）" numeric value={money.unsettled} onChange={unsettled => setMoney(v => ({ ...v, unsettled }))}/><Text style={s.note}>金利・貸株料・逆日歩・手数料・配当調整金など、SBIの口座に計上される支払諸経費合計を手入力してください。受渡済み損益は現金へ反映し、この欄から除きます。</Text><Button title="金額を保存" disabled={demo} onPress={() => editAccount({ ...account, ...money })}/></Card>
-        <Text style={s.sectionTitle}>信用建玉 <Text style={s.count}>{account.positions.length}件</Text></Text>
-        {result.positions.map((p, index) => <Card key={p.id}><View style={s.itemHeading}><Text style={s.cardTitle}>{p.code} {p.name}</Text><Text style={p.side === 'buy' ? s.buy : s.sell}>{p.side === 'buy' ? '買建' : '売建'}</Text></View><Row label={`${p.quantity.toLocaleString()}株 / 建値`} value={exact(p.entryUsed)}/><Row label={`終値 ${result.date ?? ''}`} value={exact(p.price)}/><Row label="評価損益" value={amount(p.pnl)}/><Button title="編集・削除 / 権利処理を確認" secondary disabled={demo} onPress={() => setEditor({ kind: 'position', index })}/></Card>)}
-        {!account.positions.length && <Text style={s.body}>同じ銘柄でも、建値・売買区分が違う建玉は分けて登録できます。</Text>}
-        <Button title="＋ 信用建玉を追加" disabled={demo} onPress={() => setEditor({ kind: 'position', index: null })}/>
+        <View style={s.holdingsHeading}><View style={{flex:1}}><Text style={s.sectionTitle}>保有している信用建玉</Text><Text style={s.note}>現値は最新の終値 · {snapshot?.tradingDate ?? '未取得'}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="信用建玉を追加" disabled={demo} style={s.addPosition} onPress={() => setEditor({kind:'position',index:null})}><Text style={s.chipText}>＋ 建玉</Text></Pressable></View>
+        {account.positions.map((p,index) => {
+          const quote = snapshot ? findQuote(snapshot,p.code) : undefined;
+          return <Pressable key={p.id} accessibilityRole="button" accessibilityLabel={`${p.code} ${p.name || quote?.name || ''}の建玉を編集`} disabled={demo} style={s.holding} onPress={() => setEditor({kind:'position',index})}>
+            <View style={s.itemHeading}><Text numberOfLines={2} style={s.stockName}>{p.name || quote?.name || p.code}</Text><Text style={s.stockCode}>{p.code}</Text></View>
+            <Text style={s.note}>{p.side === 'buy' ? '買建' : '売建'} · {p.quantity.toLocaleString()}株</Text>
+            <View style={s.priceColumns}><View style={s.priceColumn}><Text style={s.label}>建値</Text><Text selectable style={s.stockPrice}>{exact(p.entry)}</Text></View><View style={[s.priceColumn,s.currentColumn]}><Text style={s.label}>現値（終値）</Text><Text selectable style={[s.stockPrice,s.currentPrice]}>{quote?.close ? exact(quote.close) : '未取得'}</Text></View></View>
+          </Pressable>;
+        })}
+        {!account.positions.length && <Card title="建玉を登録してください"><Text style={s.body}>上の「＋ 建玉」から銘柄・株数・建値を入力します。登録後はここに建値と最新の終値が並びます。</Text></Card>}
+        <Pressable accessibilityRole="button" disabled={busy || demo || !apiAccessKey} onPress={() => void refresh()} style={s.refreshCompact}><Text style={s.chipText}>{busy ? '終値を取得中…' : '終値を更新'}</Text></Pressable>
+        {!demo && saved.syncError && <Text style={s.error}>{saved.syncError}。前回取得した終値を表示しています。</Text>}
+        {!snapshot && !apiAccessKey && <Button title="終値への接続を設定" secondary onPress={() => setTab('設定')}/>}
+        <Text style={s.note}>銘柄をタップして建玉を編集できます。維持率と計算の内訳は上のタブから確認できます。</Text>
         <Text style={s.sectionTitle}>代用有価証券 <Text style={s.count}>{account.collaterals.length}件</Text></Text>
         {result.collaterals.map((c, index) => <Card key={c.id} title={`${c.code} ${c.name}`}><Row label={`${c.quantity.toLocaleString()}株 / 掛目`} value={`${c.haircut}%`}/><Row label="評価に使用した価格" value={exact(c.price)}/><Row label="代用評価額" value={amount(c.value)}/><Button title="編集・削除 / 権利処理を確認" secondary disabled={demo} onPress={() => setEditor({ kind: 'collateral', index })}/></Card>)}
         <Button title="＋ 代用株を追加" disabled={demo} onPress={() => setEditor({ kind: 'collateral', index: null })}/><Text style={s.note}>受渡済みで信用保証金に差し入れている株だけ登録してください。掛目は銘柄ごとに変更できます。代用不適格は0%。投資信託の基準価額自動取得には対応していません。</Text>
+        <Card title="保証金・費用（円）"><Field label="委託保証金現金" numeric value={money.cash} onChange={cash => setMoney(v => ({ ...v, cash }))}/><Field label="支払諸経費の合計" numeric value={money.costs} onChange={costs => setMoney(v => ({ ...v, costs }))}/><Field label="受渡未到来の決済損益（損はマイナス）" numeric value={money.unsettled} onChange={unsettled => setMoney(v => ({ ...v, unsettled }))}/><Text style={s.note}>金利・貸株料・逆日歩・手数料・配当調整金など、SBIの口座に計上される支払諸経費合計を手入力してください。受渡済み損益は現金へ反映し、この欄から除きます。</Text><Button title="金額を保存" disabled={demo} onPress={() => editAccount({ ...account, ...money })}/></Card>
       </>}
       {tab === '途中式' && <>
         <Card title="計算ルール · SBI通常信用"><Text selectable style={s.formula}>維持率 ＝ 実質保証金 ÷ 建玉代金合計 × 100</Text><Text style={s.body}>建玉代金は、建値×株数。株価が動いても分母は変わりません。売建・買建とも正の金額で合算します。</Text></Card>
@@ -199,11 +208,13 @@ function Main() {
         <Card title="バックアップ"><Text style={s.body}>3パターンすべての建玉・保証金をバックアップします。金額が含まれます。旧形式のJSONは選択中のパターンだけに復元します。</Text><Button title="JSONバックアップを作成" secondary onPress={() => setBackup(JSON.stringify({ version: 2, patterns: saved.patterns, activePattern: saved.activePattern }, null, 2))}/><TextInput accessibilityLabel="バックアップJSON" style={[s.input, { minHeight: 140, textAlignVertical: 'top' }]} multiline value={backup} onChangeText={setBackup} placeholder="復元するJSONを貼り付け"/><Button title="バックアップを共有" secondary disabled={!backup} onPress={() => { void Share.share({ message: backup }).catch(() => setNotice('JSONを選択してコピーしてください')); }}/><Button title="JSONの内容で復元" disabled={!backup} onPress={() => setDeletePrompt('restore')}/></Card>
         <Card title="データとプライバシー"><Text style={s.body}>証券口座へログインせず、注文も発注しません。入力した建玉・保証金は端末内に保存し、株価サーバーへ送信しません。株価APIへの通信時にはサーバーにIPアドレス等の通信情報が届きます。</Text><Button title="端末の入力をすべて削除" secondary onPress={() => setDeletePrompt('all')}/></Card>
       </>}
-      <Text style={s.footer}>信用デモ取引 · v1.4.0{ '\n' }SBI基準の終値シミュレーション</Text>
+      <View style={s.extraPatterns}><Pressable accessibilityRole="button" accessibilityLabel="パターン2・3の設定を開閉" accessibilityState={{expanded:extraPatterns}} onPress={() => setExtraPatterns(v => !v)} style={s.extraToggle}><Text style={s.extraLabel}>{extraPatterns ? '閉じる' : '別パターン（2・3）'}</Text></Pressable>
+        {extraPatterns && <Card title="別パターンの設定"><View style={s.chips}>{patterns.map((p,index) => <Button key={p.id} title={p.name} secondary={saved.activePattern !== index} onPress={() => selectPattern(index)}/>)}</View><Text style={s.note}>建玉・現金・費用はそれぞれ独立しています。起動時はパターン1を表示します。</Text>{comparisons.map(p => <Row key={p.id} label={p.name} value={p.result.ratio === null ? '未算出' : `${p.result.ratio}%`}/>)}
+          <Field label="選択中のパターン名" value={patternName} onChange={setPatternName}/><Button title="名前を保存" disabled={demo} onPress={() => {try {const renamed=patternSchema.parse({...active,name:patternName});setSaved(v => ({...v,patterns:v.patterns.map((p,i) => i === v.activePattern ? renamed : p)}));setNotice('パターン名を保存しました');} catch {setNotice('パターン名は1〜30文字で入力してください');}}}/>
+        </Card>}
+      </View>
+      <Text style={s.footer}>信用デモ取引 · v1.5.0{'\n'}SBI基準の終値シミュレーション</Text>
     </ScrollView>
-    <View style={s.patternDock}><View style={s.patternSwitch}>
-      {patterns.map((p, index) => <React.Fragment key={p.id}>{index > 0 && <Text style={s.patternSeparator}>·</Text>}<Pressable accessibilityRole="button" accessibilityLabel={`${p.name}を選択`} accessibilityState={{ selected: saved.activePattern === index }} onPress={() => selectPattern(index)} style={s.patternMiniButton}><Text style={[s.patternMiniText, saved.activePattern === index && s.patternMiniActive]}>{index + 1}</Text></Pressable></React.Fragment>)}
-    </View></View>
     {editor && <Editor kind={editor.kind} index={editor.index} account={account} snapshot={snapshot} onClose={() => setEditor(null)} onSave={next => { editAccount(next); setEditor(null); }}/ >}
     <Modal visible={deletePrompt !== null} transparent animationType="fade" onRequestClose={() => setDeletePrompt(null)}><View style={s.modalShade}><View style={s.dialog}><Text style={s.cardTitle}>{deletePrompt === 'all' ? '入力をすべて削除しますか' : '入力をJSONの内容で置き換えますか'}</Text><Text style={s.body}>3パターン形式の復元・全削除は全リストが対象です。旧形式の復元は選択中のリストだけが対象です。必要なら先にバックアップしてください。</Text><Button title="実行する" onPress={() => {
       try { if (deletePrompt === 'all') { setRememberKey(false); setApiAccessKey(''); } const next = deletePrompt === 'all' ? createPortfolio() : restorePortfolio(JSON.parse(backup), saved); setSaved(v => ({ ...v, ...next })); setScenario({ changePercent: '0', cashDelta: '0' }); setDemo(false); setStorageError(''); setNotice('入力データを更新しました'); } catch { setNotice('バックアップJSONの形式が不正です'); } setDeletePrompt(null);
@@ -236,23 +247,28 @@ function Editor({ kind, index, account, snapshot, onClose, onSave }: { kind: 'po
       }
     } catch (e) { setError(e instanceof Error && !e.message.startsWith('[') ? e.message : 'コード4桁、株数、建値/掛目、日付を確認してください'); }
   }
-  return <Modal visible animationType="slide" onRequestClose={onClose}><SafeAreaView style={s.safe}><KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={s.header}><Text style={s.title}>{kind === 'position' ? '信用建玉' : '代用株'}{index === null ? 'を追加' : 'を編集'}</Text><Pressable onPress={onClose}><Text style={s.chipText}>閉じる</Text></Pressable></View><ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
+  return <Modal visible animationType="slide" onRequestClose={onClose}><SafeAreaView style={s.safe}><KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={s.header}><Text style={s.title}>{kind === 'position' ? '信用建玉' : '代用株'}{index === null ? 'を追加' : 'を編集'}</Text><Pressable accessibilityRole="button" accessibilityLabel="建玉編集を閉じる" style={{minWidth:44,minHeight:44,alignItems:"center",justifyContent:"center"}} onPress={onClose}><Text style={s.chipText}>閉じる</Text></Pressable></View><ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
     <Field label="銘柄コード / 名前で検索" value={code} onChange={v => setCode(v.toUpperCase())} placeholder="7203 / 285A"/>{suggestions.map(q => <Pressable key={q.code} style={s.searchRow} onPress={() => { setCode(q.code); setName(q.name); }}><Text style={s.body}>{q.code} {q.name}</Text></Pressable>)}<Field label="銘柄名（任意）" value={name} onChange={setName}/><Field label="株数" numeric value={quantity} onChange={setQuantity}/>
     {kind === 'position' ? <><View style={s.chips}><Button title="買建" secondary={side !== 'buy'} onPress={() => setSide('buy')}/><Button title="売建" secondary={side !== 'sell'} onPress={() => setSide('sell')}/></View><Field label="建値（円）" numeric value={entry} onChange={setEntry}/><Field label="建日（YYYY-MM-DD）" value={openedOn} onChange={setOpenedOn}/></> : <Field label="代用掛目（%）" numeric value={haircut} onChange={setHaircut}/>}
     <Text style={s.note}>分割・併合があった場合は処理後の株数・建値を入力してください。「確認して保存」で今日までの権利処理を確認したこととして記録します。</Text>{error !== '' && <Text style={s.error}>{error}</Text>}<Button title="確認して保存" onPress={save}/>{index !== null && <><Button title="この登録を削除" secondary onPress={() => setDeleting(true)}/>{deleting && <View style={s.warning}><Text style={s.body}>この登録を削除しますか？</Text><Button title="削除を実行" onPress={() => onSave(kind === 'position' ? { ...account, positions: account.positions.filter((_, i) => i !== index) } : { ...account, collaterals: account.collaterals.filter((_, i) => i !== index) })}/><Button title="キャンセル" secondary onPress={() => setDeleting(false)}/></View>}</>}
   </ScrollView></KeyboardAvoidingView></SafeAreaView></Modal>;
 }
 const s = StyleSheet.create({
+  holdingsHeading: {flexDirection:'row',alignItems:'center',gap:8}, addPosition: {minHeight:44,paddingHorizontal:14,borderRadius:10,justifyContent:'center',backgroundColor:'#1b2a3b'},
+  holding: {backgroundColor:'#121a26',borderWidth:1,borderColor:'#263246',borderRadius:14,padding:16,gap:6}, stockName: {flex:1,color:'#e6edf7',fontSize:17,fontWeight:'600',lineHeight:24}, stockCode: {color:'#8191a8',fontSize:13,lineHeight:24},
+  priceColumns: {flexDirection:'row',gap:12,marginTop:8}, priceColumn: {flex:1,gap:5}, currentColumn: {borderLeftWidth:1,borderLeftColor:'#2b3749',paddingLeft:14}, stockPrice: {fontSize:21,lineHeight:30,color:'#e6edf7',fontWeight:'600',fontVariant:['tabular-nums'],flexShrink:1}, currentPrice: {color:'#83cde6'},
+  refreshCompact: {minHeight:44,alignItems:'center',justifyContent:'center',borderRadius:10,backgroundColor:'#101824'}, extraPatterns: {marginTop:20,gap:8}, extraToggle: {alignSelf:'flex-end',minHeight:44,justifyContent:'center',paddingHorizontal:10}, extraLabel: {fontSize:11,color:'#7f8da3'},
+
   activePatternNote: { fontSize: 10, color: '#7d899c', textAlign: 'right' },
   patternDock: { alignItems: 'flex-end', paddingRight: 14, paddingVertical: 3 }, patternSwitch: { flexDirection: 'row', alignItems: 'center' }, patternMiniButton: { minWidth: 26, minHeight: 26, alignItems: 'center', justifyContent: 'center' }, patternMiniText: { fontSize: 10, color: '#46556b' }, patternMiniActive: { color: '#8492a7', fontWeight: '600' }, patternSeparator: { fontSize: 9, color: '#39495e' },
-  safe: { flex: 1, backgroundColor: '#0b1018' }, header: { paddingHorizontal: 22, paddingVertical: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  safe: { flex: 1, backgroundColor: '#0b1018' }, header: { paddingHorizontal: 16, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   eyebrow: { fontSize: 10, letterSpacing: 1.8, color: '#8297b5', marginBottom: 7 }, title: { fontSize: 22, color: '#e6edf7', fontWeight: '700' }, tag: { fontSize: 11, color: '#91bdd2', backgroundColor: '#1b2a3b', padding: 8, borderRadius: 8 },
-  tabs: { flexDirection: 'row', marginHorizontal: 18, backgroundColor: '#101824', padding: 4, borderRadius: 12 }, tab: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 9 }, activeTab: { backgroundColor: '#20334b' }, tabText: { fontSize: 12, color: '#8796ae' }, activeTabText: { color: '#83cde6', fontWeight: '700' },
-  content: { padding: 18, gap: 16, maxWidth: 720, width: '100%', alignSelf: 'center', paddingBottom: 36 }, hero: { borderRadius: 22, padding: 26, backgroundColor: '#13263b', borderWidth: 1, borderColor: '#2c4359' }, heroLabel: { color: '#91bdd2', fontSize: 13 }, rate: { fontSize: 62, color: '#fff', fontWeight: '600', marginVertical: 8, fontVariant: ['tabular-nums'] }, percent: { fontSize: 27, color: '#6fcfe5' }, heroBody: { fontSize: 12, color: '#a7bccf', lineHeight: 20 }, heroDivider: { height: 1, backgroundColor: '#2c4359', marginVertical: 16 },
-  card: { backgroundColor: '#121a26', borderRadius: 16, padding: 20, gap: 12, borderWidth: 1, borderColor: '#263246' }, cardTitle: { fontSize: 16, fontWeight: '700', color: '#e0e7f1', lineHeight: 24, flexShrink: 1 }, body: { fontSize: 13, lineHeight: 22, color: '#b0bdce' }, note: { fontSize: 11, lineHeight: 19, color: '#7f8da3' }, bold: { fontWeight: '700', color: '#d8effb' },
-  grid: { flexDirection: 'row', gap: 12 }, tile: { flex: 1, borderRadius: 14, padding: 18, backgroundColor: '#182435', gap: 7 }, tileValue: { fontSize: 22, color: '#d8effb', fontWeight: '600' }, row: { flexDirection: 'row', justifyContent: 'space-between', gap: 14, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#263246' }, rowLabel: { flex: 1, color: '#8796ae', fontSize: 12, lineHeight: 19 }, rowValue: { flexShrink: 1, color: '#e0e7f1', fontSize: 13, fontVariant: ['tabular-nums'], textAlign: 'right', lineHeight: 19 },
-  button: { backgroundColor: '#2f6fe4', paddingVertical: 14, paddingHorizontal: 18, borderRadius: 10, alignItems: 'center' }, secondary: { backgroundColor: '#1b2a3b' }, buttonText: { color: '#fff', fontSize: 13, fontWeight: '600' }, field: { gap: 7 }, label: { fontSize: 11, color: '#8796ae' }, input: { borderColor: '#344155', borderWidth: 1, borderRadius: 9, backgroundColor: '#192332', padding: 13, fontSize: 15, color: '#e0e7f1' },
+  tabs: { flexDirection: 'row', marginHorizontal: 12, backgroundColor: '#101824', padding: 4, borderRadius: 12 }, tab: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 9 }, activeTab: { backgroundColor: '#20334b' }, tabText: { fontSize: 14, color: '#8796ae' }, activeTabText: { color: '#83cde6', fontWeight: '700' },
+  content: { padding: 12, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center', paddingBottom: 36 }, hero: { borderRadius: 22, padding: 26, backgroundColor: '#13263b', borderWidth: 1, borderColor: '#2c4359' }, heroLabel: { color: '#91bdd2', fontSize: 13 }, rate: { fontSize: 62, color: '#fff', fontWeight: '600', marginVertical: 8, fontVariant: ['tabular-nums'] }, percent: { fontSize: 27, color: '#6fcfe5' }, heroBody: { fontSize: 12, color: '#a7bccf', lineHeight: 20 }, heroDivider: { height: 1, backgroundColor: '#2c4359', marginVertical: 16 },
+  card: { backgroundColor: '#121a26', borderRadius: 16, padding: 16, gap: 12, borderWidth: 1, borderColor: '#263246' }, cardTitle: { fontSize: 16, fontWeight: '700', color: '#e0e7f1', lineHeight: 24, flexShrink: 1 }, body: { fontSize: 13, lineHeight: 22, color: '#b0bdce' }, note: { fontSize: 11, lineHeight: 19, color: '#7f8da3' }, bold: { fontWeight: '700', color: '#d8effb' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 }, tile: { flex: 1, minWidth: 135, borderRadius: 14, padding: 18, backgroundColor: '#182435', gap: 7 }, tileValue: { fontSize: 22, color: '#d8effb', fontWeight: '600' }, row: { flexDirection: 'row', justifyContent: 'space-between', gap: 14, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#263246' }, rowLabel: { flex: 1, color: '#8796ae', fontSize: 12, lineHeight: 19 }, rowValue: { flexShrink: 1, color: '#e0e7f1', fontSize: 13, fontVariant: ['tabular-nums'], textAlign: 'right', lineHeight: 19 },
+  button: { backgroundColor: '#2f6fe4', paddingVertical: 14, paddingHorizontal: 18, borderRadius: 10, alignItems: 'center' }, secondary: { backgroundColor: '#1b2a3b' }, buttonText: { color: '#fff', fontSize: 13, fontWeight: '600' }, field: { gap: 7 }, label: { fontSize: 11, color: '#8796ae' }, input: { borderColor: '#344155', borderWidth: 1, borderRadius: 9, backgroundColor: '#192332', padding: 13, fontSize: 16, color: '#e0e7f1' },
   warning: { backgroundColor: '#332719', padding: 16, borderRadius: 12, gap: 10 }, warningText: { color: '#e8b56b', fontSize: 13, lineHeight: 20, fontWeight: '700' }, error: { color: '#f3868e', fontSize: 12, lineHeight: 21 }, notice: { backgroundColor: '#182c39', borderRadius: 9, padding: 13, color: '#a7d9e7', fontSize: 12, lineHeight: 20 },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, chip: { backgroundColor: '#1b2a3b', borderRadius: 8, padding: 11 }, chipText: { color: '#83cde6', fontSize: 12, fontWeight: '600' }, sectionTitle: { fontSize: 18, fontWeight: '700', color: '#e0e7f1', marginTop: 12 }, count: { color: '#8796ae', fontSize: 12 }, itemHeading: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 }, buy: { color: '#6cdbc0', backgroundColor: '#153b34', padding: 7, borderRadius: 6, overflow: 'hidden', fontSize: 11 }, sell: { color: '#f1a0ae', backgroundColor: '#402733', padding: 7, borderRadius: 6, overflow: 'hidden', fontSize: 11 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, chip: { backgroundColor: '#1b2a3b', borderRadius: 8, padding: 11 }, chipText: { color: '#83cde6', fontSize: 12, fontWeight: '600' }, sectionTitle: { fontSize: 18, fontWeight: '700', color: '#e0e7f1', marginTop: 4 }, count: { color: '#8796ae', fontSize: 12 }, itemHeading: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 }, buy: { color: '#6cdbc0', backgroundColor: '#153b34', padding: 7, borderRadius: 6, overflow: 'hidden', fontSize: 11 }, sell: { color: '#f1a0ae', backgroundColor: '#402733', padding: 7, borderRadius: 6, overflow: 'hidden', fontSize: 11 },
   step: { borderBottomWidth: 1, borderBottomColor: '#263246', paddingBottom: 12, gap: 8 }, formula: { fontSize: 13, color: '#bbd6e8', lineHeight: 26, fontVariant: ['tabular-nums'] }, scenario: { gap: 10, padding: 14, borderRadius: 10, backgroundColor: '#17273a' }, footer: { fontSize: 10, color: '#586880', textAlign: 'center', lineHeight: 19, marginTop: 8 }, modalShade: { flex: 1, backgroundColor: '#0006', justifyContent: 'center', padding: 24 }, dialog: { backgroundColor: '#121a26', borderRadius: 16, padding: 24, gap: 16 }, searchRow: { backgroundColor: '#192332', padding: 13, borderRadius: 8 }
 });
