@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Decimal from 'decimal.js';
 import Slider from './src/PriceSlider';
+import { buildSecurityIndex, searchSecurities } from './src/security-search';
 import { StressChart } from './src/StressChart';
 import { readAccessKey, saveAccessKey, keyStorageNote, consumeSetupKey } from './src/access-key';
 import { accountSchema, collateralSchema, positionSchema, snapshotSchema, type Account, type Snapshot } from './src/schema';
@@ -231,8 +232,9 @@ function Editor({ kind, index, account, snapshot, onClose, onSave }: { kind: 'po
   const [haircut, setHaircut] = useState(item && 'haircut' in item ? item.haircut : '80');
   const [openedOn, setOpenedOn] = useState(item && 'openedOn' in item ? item.openedOn : todayJst());
   const [error, setError] = useState(''), [deleting, setDeleting] = useState(false);
-  const seen = new Set<string>();
-  const suggestions = snapshot?.quotes.filter(q => { if (seen.has(q.code)) return false; seen.add(q.code); return code && (q.code.includes(code.toUpperCase()) || q.name.includes(code)); }).slice(0, 6) ?? [];
+  const [search, setSearch] = useState('');
+  const securities = useMemo(() => buildSecurityIndex(snapshot?.quotes ?? []), [snapshot]);
+  const suggestions = useMemo(() => searchSecurities(securities, search), [securities, search]);
   function save() {
     try {
       if (!/^\d+$/.test(quantity)) throw new Error('株数は正の整数です');
@@ -248,7 +250,12 @@ function Editor({ kind, index, account, snapshot, onClose, onSave }: { kind: 'po
     } catch (e) { setError(e instanceof Error && !e.message.startsWith('[') ? e.message : 'コード4桁、株数、建値/掛目、日付を確認してください'); }
   }
   return <Modal visible animationType="slide" onRequestClose={onClose}><SafeAreaView style={s.safe}><KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={s.header}><Text style={s.title}>{kind === 'position' ? '信用建玉' : '代用株'}{index === null ? 'を追加' : 'を編集'}</Text><Pressable accessibilityRole="button" accessibilityLabel="建玉編集を閉じる" style={{minWidth:44,minHeight:44,alignItems:"center",justifyContent:"center"}} onPress={onClose}><Text style={s.chipText}>閉じる</Text></Pressable></View><ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
-    <Field label="銘柄コード / 名前で検索" value={code} onChange={v => setCode(v.toUpperCase())} placeholder="7203 / 285A"/>{suggestions.map(q => <Pressable key={q.code} style={s.searchRow} onPress={() => { setCode(q.code); setName(q.name); }}><Text style={s.body}>{q.code} {q.name}</Text></Pressable>)}<Field label="銘柄名（任意）" value={name} onChange={setName}/><Field label="株数" numeric value={quantity} onChange={setQuantity}/>
+    <Field label="銘柄名で検索" value={search} onChange={setSearch} placeholder="例：トヨタ、ソニー（コードも可）"/>
+    {suggestions.map(q => <Pressable key={q.code} accessibilityRole="button" accessibilityLabel={`${q.name}（${q.code}）を選択`} style={s.searchRow} onPress={() => { setCode(q.code); setName(q.name); setSearch(''); }}><View style={s.itemHeading}><Text style={s.stockName}>{q.name}</Text><Text style={s.stockCode}>{q.code}</Text></View></Pressable>)}
+    {search.trim() !== '' && <Text style={s.note}>{suggestions.length ? '候補をタップするとコード・銘柄名が入ります。最大8件表示。' : '該当する銘柄がありません。名称の一部で検索するか、コードを直接入力してください。'}</Text>}
+    <Text style={s.note}>終値の接続前でも東証銘柄名で検索できます。地方単独上場・新規上場など、一覧にない銘柄は直接入力できます。</Text>
+    <Field label="銘柄コード" value={code} onChange={v => setCode(v.normalize('NFKC').toUpperCase())} placeholder="7203 / 285A"/><Field label="銘柄名（任意）" value={name} onChange={setName}/><Field label="株数" numeric value={quantity} onChange={setQuantity}/>
+
     {kind === 'position' ? <><View style={s.chips}><Button title="買建" secondary={side !== 'buy'} onPress={() => setSide('buy')}/><Button title="売建" secondary={side !== 'sell'} onPress={() => setSide('sell')}/></View><Field label="建値（円）" numeric value={entry} onChange={setEntry}/><Field label="建日（YYYY-MM-DD）" value={openedOn} onChange={setOpenedOn}/></> : <Field label="代用掛目（%）" numeric value={haircut} onChange={setHaircut}/>}
     <Text style={s.note}>分割・併合があった場合は処理後の株数・建値を入力してください。「確認して保存」で今日までの権利処理を確認したこととして記録します。</Text>{error !== '' && <Text style={s.error}>{error}</Text>}<Button title="確認して保存" onPress={save}/>{index !== null && <><Button title="この登録を削除" secondary onPress={() => setDeleting(true)}/>{deleting && <View style={s.warning}><Text style={s.body}>この登録を削除しますか？</Text><Button title="削除を実行" onPress={() => onSave(kind === 'position' ? { ...account, positions: account.positions.filter((_, i) => i !== index) } : { ...account, collaterals: account.collaterals.filter((_, i) => i !== index) })}/><Button title="キャンセル" secondary onPress={() => setDeleting(false)}/></View>}</>}
   </ScrollView></KeyboardAvoidingView></SafeAreaView></Modal>;
