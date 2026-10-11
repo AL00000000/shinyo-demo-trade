@@ -214,7 +214,7 @@ function Main() {
           <Field label="選択中のパターン名" value={patternName} onChange={setPatternName}/><Button title="名前を保存" disabled={demo} onPress={() => {try {const renamed=patternSchema.parse({...active,name:patternName});setSaved(v => ({...v,patterns:v.patterns.map((p,i) => i === v.activePattern ? renamed : p)}));setNotice('パターン名を保存しました');} catch {setNotice('パターン名は1〜30文字で入力してください');}}}/>
         </Card>}
       </View>
-      <Text style={s.footer}>信用デモ取引 · v1.5.0{'\n'}SBI基準の終値シミュレーション</Text>
+      <Text style={s.footer}>信用デモ取引 · v1.5.1{'\n'}SBI基準の終値シミュレーション</Text>
     </ScrollView>
     {editor && <Editor kind={editor.kind} index={editor.index} account={account} snapshot={snapshot} onClose={() => setEditor(null)} onSave={next => { editAccount(next); setEditor(null); }}/ >}
     <Modal visible={deletePrompt !== null} transparent animationType="fade" onRequestClose={() => setDeletePrompt(null)}><View style={s.modalShade}><View style={s.dialog}><Text style={s.cardTitle}>{deletePrompt === 'all' ? '入力をすべて削除しますか' : '入力をJSONの内容で置き換えますか'}</Text><Text style={s.body}>3パターン形式の復元・全削除は全リストが対象です。旧形式の復元は選択中のリストだけが対象です。必要なら先にバックアップしてください。</Text><Button title="実行する" onPress={() => {
