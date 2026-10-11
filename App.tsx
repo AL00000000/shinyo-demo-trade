@@ -189,7 +189,7 @@ function Main() {
         <Text style={s.note}>銘柄をタップして建玉を編集できます。維持率と計算の内訳は上のタブから確認できます。</Text>
         <Text style={s.sectionTitle}>代用有価証券 <Text style={s.count}>{account.collaterals.length}件</Text></Text>
         {result.collaterals.map((c, index) => <Card key={c.id} title={`${c.code} ${c.name}`}><Row label={`${c.quantity.toLocaleString()}株 / 掛目`} value={`${c.haircut}%`}/><Row label="評価に使用した価格" value={exact(c.price)}/><Row label="代用評価額" value={amount(c.value)}/><Button title="編集・削除 / 権利処理を確認" secondary disabled={demo} onPress={() => setEditor({ kind: 'collateral', index })}/></Card>)}
-        <Button title="＋ 代用株を追加" disabled={demo} onPress={() => setEditor({ kind: 'collateral', index: null })}/><Text style={s.note}>受渡済みで信用保証金に差し入れている株だけ登録してください。掛目は銘柄ごとに変更できます。代用不適格は0%。投資信託の基準価額自動取得には対応していません。</Text>
+        <Button title="＋ 代用株を追加" disabled={demo} onPress={() => setEditor({ kind: 'collateral', index: null })}/><Text style={s.note}>受渡済みで信用保証金に差し入れている株だけ登録してください。このツールでは代用株の掛目を一律80%で計算します。投資信託の基準価額自動取得には対応していません。</Text>
         <Card title="保証金・費用（円）"><Field label="委託保証金現金" numeric value={money.cash} onChange={cash => setMoney(v => ({ ...v, cash }))}/><Field label="支払諸経費の合計" numeric value={money.costs} onChange={costs => setMoney(v => ({ ...v, costs }))}/><Field label="受渡未到来の決済損益（損はマイナス）" numeric value={money.unsettled} onChange={unsettled => setMoney(v => ({ ...v, unsettled }))}/><Text style={s.note}>金利・貸株料・逆日歩・手数料・配当調整金など、SBIの口座に計上される支払諸経費合計を手入力してください。受渡済み損益は現金へ反映し、この欄から除きます。</Text><Button title="金額を保存" disabled={demo} onPress={() => editAccount({ ...account, ...money })}/></Card>
       </>}
       {tab === '途中式' && <>
@@ -214,7 +214,7 @@ function Main() {
           <Field label="選択中のパターン名" value={patternName} onChange={setPatternName}/><Button title="名前を保存" disabled={demo} onPress={() => {try {const renamed=patternSchema.parse({...active,name:patternName});setSaved(v => ({...v,patterns:v.patterns.map((p,i) => i === v.activePattern ? renamed : p)}));setNotice('パターン名を保存しました');} catch {setNotice('パターン名は1〜30文字で入力してください');}}}/>
         </Card>}
       </View>
-      <Text style={s.footer}>信用デモ取引 · v1.5.1{'\n'}SBI基準の終値シミュレーション</Text>
+      <Text style={s.footer}>信用デモ取引 · v1.5.2{'\n'}SBI基準の終値シミュレーション</Text>
     </ScrollView>
     {editor && <Editor kind={editor.kind} index={editor.index} account={account} snapshot={snapshot} onClose={() => setEditor(null)} onSave={next => { editAccount(next); setEditor(null); }}/ >}
     <Modal visible={deletePrompt !== null} transparent animationType="fade" onRequestClose={() => setDeletePrompt(null)}><View style={s.modalShade}><View style={s.dialog}><Text style={s.cardTitle}>{deletePrompt === 'all' ? '入力をすべて削除しますか' : '入力をJSONの内容で置き換えますか'}</Text><Text style={s.body}>3パターン形式の復元・全削除は全リストが対象です。旧形式の復元は選択中のリストだけが対象です。必要なら先にバックアップしてください。</Text><Button title="実行する" onPress={() => {
@@ -229,7 +229,6 @@ function Editor({ kind, index, account, snapshot, onClose, onSave }: { kind: 'po
   const [quantity, setQuantity] = useState(item ? String(item.quantity) : '100');
   const [entry, setEntry] = useState(item && 'entry' in item ? item.entry : '');
   const [side, setSide] = useState<'buy' | 'sell'>(item && 'side' in item ? item.side : 'buy');
-  const [haircut, setHaircut] = useState(item && 'haircut' in item ? item.haircut : '80');
   const [openedOn, setOpenedOn] = useState(item && 'openedOn' in item ? item.openedOn : todayJst());
   const [error, setError] = useState(''), [deleting, setDeleting] = useState(false);
   const [search, setSearch] = useState('');
@@ -244,10 +243,10 @@ function Editor({ kind, index, account, snapshot, onClose, onSave }: { kind: 'po
         const next = positionSchema.parse({ ...base, entry, side, openedOn });
         onSave({ ...account, positions: index === null ? [...account.positions, next] : account.positions.map((p, i) => i === index ? next : p) });
       } else {
-        const next = collateralSchema.parse({ ...base, haircut });
+        const next = collateralSchema.parse({ ...base, haircut: '80' });
         onSave({ ...account, collaterals: index === null ? [...account.collaterals, next] : account.collaterals.map((c, i) => i === index ? next : c) });
       }
-    } catch (e) { setError(e instanceof Error && !e.message.startsWith('[') ? e.message : 'コード4桁、株数、建値/掛目、日付を確認してください'); }
+    } catch (e) { setError(e instanceof Error && !e.message.startsWith('[') ? e.message : 'コード4桁、株数、建値、日付を確認してください'); }
   }
   return <Modal visible animationType="slide" onRequestClose={onClose}><SafeAreaView style={s.safe}><KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={s.header}><Text style={s.title}>{kind === 'position' ? '信用建玉' : '代用株'}{index === null ? 'を追加' : 'を編集'}</Text><Pressable accessibilityRole="button" accessibilityLabel="建玉編集を閉じる" style={{minWidth:44,minHeight:44,alignItems:"center",justifyContent:"center"}} onPress={onClose}><Text style={s.chipText}>閉じる</Text></Pressable></View><ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
     <Field label="銘柄名で検索" value={search} onChange={setSearch} placeholder="例：トヨタ、ソニー（コードも可）"/>
@@ -256,7 +255,7 @@ function Editor({ kind, index, account, snapshot, onClose, onSave }: { kind: 'po
     <Text style={s.note}>終値の接続前でも東証銘柄名で検索できます。地方単独上場・新規上場など、一覧にない銘柄は直接入力できます。</Text>
     <Field label="銘柄コード" value={code} onChange={v => setCode(v.normalize('NFKC').toUpperCase())} placeholder="7203 / 285A"/><Field label="銘柄名（任意）" value={name} onChange={setName}/><Field label="株数" numeric value={quantity} onChange={setQuantity}/>
 
-    {kind === 'position' ? <><View style={s.chips}><Button title="買建" secondary={side !== 'buy'} onPress={() => setSide('buy')}/><Button title="売建" secondary={side !== 'sell'} onPress={() => setSide('sell')}/></View><Field label="建値（円）" numeric value={entry} onChange={setEntry}/><Field label="建日（YYYY-MM-DD）" value={openedOn} onChange={setOpenedOn}/></> : <Field label="代用掛目（%）" numeric value={haircut} onChange={setHaircut}/>}
+    {kind === 'position' ? <><View style={s.chips}><Button title="買建" secondary={side !== 'buy'} onPress={() => setSide('buy')}/><Button title="売建" secondary={side !== 'sell'} onPress={() => setSide('sell')}/></View><Field label="建値（円）" numeric value={entry} onChange={setEntry}/><Field label="建日（YYYY-MM-DD）" value={openedOn} onChange={setOpenedOn}/></> : null}
     <Text style={s.note}>分割・併合があった場合は処理後の株数・建値を入力してください。「確認して保存」で今日までの権利処理を確認したこととして記録します。</Text>{error !== '' && <Text style={s.error}>{error}</Text>}<Button title="確認して保存" onPress={save}/>{index !== null && <><Button title="この登録を削除" secondary onPress={() => setDeleting(true)}/>{deleting && <View style={s.warning}><Text style={s.body}>この登録を削除しますか？</Text><Button title="削除を実行" onPress={() => onSave(kind === 'position' ? { ...account, positions: account.positions.filter((_, i) => i !== index) } : { ...account, collaterals: account.collaterals.filter((_, i) => i !== index) })}/><Button title="キャンセル" secondary onPress={() => setDeleting(false)}/></View>}</>}
   </ScrollView></KeyboardAvoidingView></SafeAreaView></Modal>;
 }

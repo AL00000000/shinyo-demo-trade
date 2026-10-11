@@ -37,7 +37,7 @@ test('実質レバは売建を正の時価で合算、現物は掛目前、費�
   assert.equal(r.totalExposure, '5600000'); assert.equal(r.netAssets, '2368000'); assert.equal(r.effectiveLeverage, '2.36');
   assert.equal(r.profitInclusiveRatio, r.ratio); // 通算損は二重控除しない
   const a = clone(demoAccount); a.collaterals[0].haircut = '0';
-  const zeroHaircut = calculate(a, demoSnapshot); assert.equal(zeroHaircut.collateralValue, '0');
+  const zeroHaircut = calculate(a, demoSnapshot); assert.equal(zeroHaircut.collateralValue, '800000');
   assert.equal(zeroHaircut.netAssets, r.netAssets); assert.equal(zeroHaircut.effectiveLeverage, r.effectiveLeverage);
 });
 test('純資産0以下は実質レバ未算出、建玉なしの現物は時価で算出', () => {
@@ -98,9 +98,9 @@ test('同一銘柄を信用と代用で持つ二重の値下がり', () => {
   const { a, s } = single(); a.collaterals = [{ id: 'c', code: '1234', name: '', quantity: 1000, haircut: '80', confirmedThrough: '2026-10-09' }];
   const r = calculate(a, s, { changePercent: '-10', cashDelta: '0' }); assert.equal(r.deduction, '100000'); assert.equal(r.collateralValue, '720000'); assert.equal(r.ratio, '92.00');
 });
-test('0%掛目と現金追加のシミュレーション', () => {
+test('旧掛目を80%に統一し現金追加を計算', () => {
   const a = clone(demoAccount); a.collaterals[0].haircut = '0';
-  const r = calculate(a, demoSnapshot, { changePercent: '0', cashDelta: '100000' }); assert.equal(r.collateralValue, '0'); assert.equal(r.effective, '1468000');
+  const r = calculate(a, demoSnapshot, { changePercent: '0', cashDelta: '100000' }); assert.equal(r.collateralValue, '800000'); assert.equal(r.effective, '2268000');
 });
 test('負の現金・小数株数・ゼロ建値を拒否', () => {
   const { a } = single(); assert.equal(accountSchema.safeParse({ ...a, cash: '-1' }).success, false);

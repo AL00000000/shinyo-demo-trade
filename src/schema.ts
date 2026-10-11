@@ -12,7 +12,7 @@ export const positionSchema = z.object({
 });
 export const collateralSchema = z.object({
   id: z.string(), code: codeSchema, name: z.string().max(80), quantity,
-  haircut: amountSchema.refine(v => Number(v) <= 100, '掛目は0〜100%'), confirmedThrough: dateSchema
+  haircut: amountSchema.refine(v => Number(v) <= 100, '掛目は0〜100%').transform(() => '80').default('80'), confirmedThrough: dateSchema
 });
 export const accountSchema = z.object({
   cash: amountSchema, costs: amountSchema, unsettled: signedAmountSchema,
