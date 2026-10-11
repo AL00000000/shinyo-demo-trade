@@ -6,7 +6,7 @@ export const demoAccount: Account = {
     { id: 'demo1', code: '7203', name: 'トヨタ自動車', side: 'buy', quantity: 1000, entry: '2500', openedOn: '2026-10-01', confirmedThrough: '2026-10-09' },
     { id: 'demo2', code: '6758', name: 'ソニーグループ', side: 'sell', quantity: 1000, entry: '2500', openedOn: '2026-10-01', confirmedThrough: '2026-10-09' }
   ],
-  collaterals: [{ id: 'demo3', code: '8306', name: '三菱UFJ', quantity: 500, haircut: '80', confirmedThrough: '2026-10-09' }]
+  collaterals: [{ id: 'demo3', code: '8306', name: '三菱UFJ', quantity: 500, purchasePrice: '1800', haircut: '80', confirmedThrough: '2026-10-09' }]
 };
 export const demoSnapshot: Snapshot = {
   version: 1, source: '操作確認用の架空価格・実相場ではありません', tradingDate: '2026-10-09', expectedTradingDate: '2026-10-09',

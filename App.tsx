@@ -4,6 +4,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Decimal from 'decimal.js';
 import Slider from './src/PriceSlider';
+import { holdingPnl } from './src/holding-pnl';
 import { buildSecurityIndex, searchSecurities } from './src/security-search';
 import { StressChart } from './src/StressChart';
 import { readAccessKey, saveAccessKey, keyStorageNote, consumeSetupKey } from './src/access-key';
@@ -34,6 +35,8 @@ const exact = (v: string | null) => {
   const divisor = unit === '億円' ? 100000000 : unit === '万円' ? 10000 : 1;
   return `${value.isNegative() ? '−' : ''}${a.div(divisor).toFixed()}${unit}`;
 };
+const priceDate = (date: string | undefined) => date ? `${Number(date.slice(5,7))}月${Number(date.slice(8,10))}日` : '未取得';
+function PnlRow({label,value}:{label:string;value:string|null}) { return <View style={s.row}><Text style={s.rowLabel}>{label}</Text><Text selectable style={[s.rowValue,s.bold,{color:value===null?'#8191a8':new Decimal(value).gt(0)?'#69d5ad':new Decimal(value).lt(0)?'#f18f97':'#e0e7f1'}]}>{value===null?'未算出':`${new Decimal(value).gt(0)?'＋':''}${amount(value)}`}</Text></View>; }
 const id = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 export default function App() { return <SafeAreaProvider><Main /></SafeAreaProvider>; }
@@ -59,6 +62,7 @@ function Main() {
   const account = active.account, snapshot = demo ? demoSnapshot : saved.snapshot;
   const comparisons = patterns.map(p => ({ ...p, result: calculate(p.account, snapshot) }));
   const result = calculate(account, snapshot);
+  const holdingsPnl = holdingPnl(account, result);
   const simulation = (() => { try { return { value: calculate(account, snapshot, scenario), error: null }; } catch { return { value: result, error: '入力が変わりました。試算条件を再設定してください' }; } })();
   const simulated = simulation.value;
   const isScenario = !simulation.error && (scenario.changePercent !== '0' || scenario.cashDelta !== '0');
@@ -179,7 +183,8 @@ function Main() {
           return <Pressable key={p.id} accessibilityRole="button" accessibilityLabel={`${p.code} ${p.name || quote?.name || ''}の建玉を編集`} disabled={demo} style={s.holding} onPress={() => setEditor({kind:'position',index})}>
             <View style={s.itemHeading}><Text numberOfLines={2} style={s.stockName}>{p.name || quote?.name || p.code}</Text><Text style={s.stockCode}>{p.code}</Text></View>
             <Text style={s.note}>{p.side === 'buy' ? '買建' : '売建'} · {p.quantity.toLocaleString()}株</Text>
-            <View style={s.priceColumns}><View style={s.priceColumn}><Text style={s.label}>建値</Text><Text selectable style={s.stockPrice}>{exact(p.entry)}</Text></View><View style={[s.priceColumn,s.currentColumn]}><Text style={s.label}>現値（終値）</Text><Text selectable style={[s.stockPrice,s.currentPrice]}>{quote?.close ? exact(quote.close) : '未取得'}</Text></View></View>
+            <View style={s.priceColumns}><View style={s.priceColumn}><Text style={s.label}>建値</Text><Text selectable style={s.stockPrice}>{exact(p.entry)}</Text></View><View style={[s.priceColumn,s.currentColumn]}><Text style={s.label}>現値（{quote?.finalQuote ? `${priceDate(quote.date)}最終気配` : quote?.close ? `${priceDate(quote.date)}終値` : '未取得'}）</Text><Text selectable style={[s.stockPrice,s.currentPrice]}>{quote?.finalQuote ? exact(quote.finalQuote) : quote?.close ? exact(quote.close) : '未取得'}</Text></View></View>
+            <PnlRow label="評価損益" value={result.positions[index]?.pnl ?? null}/>
           </Pressable>;
         })}
         {!account.positions.length && <Card title="建玉を登録してください"><Text style={s.body}>上の「＋ 建玉」から銘柄・株数・建値を入力します。登録後はここに建値と最新の終値が並びます。</Text></Card>}
@@ -188,14 +193,21 @@ function Main() {
         {!snapshot && !apiAccessKey && <Button title="終値への接続を設定" secondary onPress={() => setTab('設定')}/>}
         <Text style={s.note}>銘柄をタップして建玉を編集できます。維持率と計算の内訳は上のタブから確認できます。</Text>
         <Text style={s.sectionTitle}>代用有価証券 <Text style={s.count}>{account.collaterals.length}件</Text></Text>
-        {result.collaterals.map((c, index) => <Card key={c.id} title={`${c.code} ${c.name}`}><Row label={`${c.quantity.toLocaleString()}株 / 掛目`} value={`${c.haircut}%`}/><Row label="評価に使用した価格" value={exact(c.price)}/><Row label="代用評価額" value={amount(c.value)}/><Button title="編集・削除 / 権利処理を確認" secondary disabled={demo} onPress={() => setEditor({ kind: 'collateral', index })}/></Card>)}
-        <Button title="＋ 代用株を追加" disabled={demo} onPress={() => setEditor({ kind: 'collateral', index: null })}/><Text style={s.note}>受渡済みで信用保証金に差し入れている株だけ登録してください。このツールでは代用株の掛目を一律80%で計算します。投資信託の基準価額自動取得には対応していません。</Text>
+        {result.collaterals.map((c, index) => {
+          const quote = snapshot ? findQuote(snapshot,c.code) : undefined;
+          const usedPrice = c.marketPrice;
+          const sourceLabel = quote?.finalQuote !== null && quote?.finalQuote !== undefined ? '最終気配' : '終値';
+          return <Card key={c.id} title={`${c.code} ${c.name}`}><Text style={s.note}>現物 · {c.quantity.toLocaleString()}株</Text><Row label="購入単価" value={c.purchasePrice ? exact(c.purchasePrice) : '未入力'}/><Row label={`評価に使用した価格（${priceDate(quote?.date)}${quote ? sourceLabel : ''}）`} value={exact(usedPrice)}/><PnlRow label="評価損益" value={holdingsPnl.collaterals[index]}/>{!c.purchasePrice && <Text style={s.note}>編集から購入単価を入力すると損益が表示されます。</Text>}<Button title="編集・削除 / 権利処理を確認" secondary disabled={demo} onPress={() => setEditor({ kind: 'collateral', index })}/></Card>;
+        })}
+        <Button title="＋ 代用株を追加" disabled={demo} onPress={() => setEditor({ kind: 'collateral', index: null })}/><Text style={s.note}>受渡済みで信用保証金に差し入れている株だけ登録してください。投資信託の基準価額自動取得には対応していません。</Text>
+        <Card title="評価損益の合計"><PnlRow label="信用建玉の合計" value={holdingsPnl.credit}/><PnlRow label="現物の合計" value={holdingsPnl.spot}/><PnlRow label="現物＋信用の合計" value={holdingsPnl.total}/><Text style={s.note}>取得済みの価格で計算した税金・費用控除前の含み損益です。価格・購入単価が不足する合計は未算出にします。</Text></Card>
         <Card title="保証金・費用（円）"><Field label="委託保証金現金" numeric value={money.cash} onChange={cash => setMoney(v => ({ ...v, cash }))}/><Field label="支払諸経費の合計" numeric value={money.costs} onChange={costs => setMoney(v => ({ ...v, costs }))}/><Field label="受渡未到来の決済損益（損はマイナス）" numeric value={money.unsettled} onChange={unsettled => setMoney(v => ({ ...v, unsettled }))}/><Text style={s.note}>金利・貸株料・逆日歩・手数料・配当調整金など、SBIの口座に計上される支払諸経費合計を手入力してください。受渡済み損益は現金へ反映し、この欄から除きます。</Text><Button title="金額を保存" disabled={demo} onPress={() => editAccount({ ...account, ...money })}/></Card>
       </>}
       {tab === '途中式' && <>
         <Card title="計算ルール · SBI通常信用"><Text selectable style={s.formula}>維持率 ＝ 実質保証金 ÷ 建玉代金合計 × 100</Text><Text style={s.body}>建玉代金は、建値×株数。株価が動いても分母は変わりません。売建・買建とも正の金額で合算します。</Text></Card>
         <Card title="① 建玉ごとの評価損益">{result.positions.map(p => <View key={p.id} style={s.step}><Text style={s.bold}>{p.code} · {p.side === 'buy' ? '買建' : '売建'}</Text><Text selectable style={s.formula}>{p.side === 'buy' ? `(${exact(p.price)} − ${exact(p.entryUsed)})` : `(${exact(p.entryUsed)} − ${exact(p.price)})`} × {p.quantity.toLocaleString()}株 = {exact(p.pnl)}</Text><Text selectable style={s.note}>建玉代金 {exact(p.entryUsed)} × {p.quantity.toLocaleString()}株 = {exact(p.notional)}</Text></View>)}<Row strong label="評価損益の通算" value={exact(result.pnl)}/><Text selectable style={s.formula}>差引評価損 = max(0, −通算損益) = {exact(result.deduction)}</Text><Text style={s.body}>個別の評価損だけを足しません。含み益と含み損を通算した後、合計がマイナスのときだけ差し引きます。通算がプラスでも保証金は増えません。</Text></Card>
         <Card title="② 代用株の評価額">{result.collaterals.map(c => <View key={c.id} style={s.step}><Text style={s.bold}>{c.code} {c.name}</Text><Text selectable style={s.formula}>{exact(c.price)} × {c.quantity.toLocaleString()}株 × {c.haircut}% = {exact(c.value)}</Text></View>)}<Row strong label="代用評価額の合計" value={exact(result.collateralValue)}/><Text style={s.note}>通常は終値。気配引けは最終約定値と最終気配値の低い方。市場は東証→名証→福証→札証の順を仮定しています。SBIの指定する優先市場との一致はデータ配信元接続時に検証が必要です。</Text></Card>
+        <Card title="現物と信用の評価損益（参考）">{result.collaterals.map((c,i) => <View key={c.id} style={s.step}><Text style={s.bold}>{c.code} {c.name}</Text><Text selectable style={s.formula}>（{exact(c.marketPrice)} − {c.purchasePrice ? exact(c.purchasePrice) : '購入単価未入力'}）× {c.quantity.toLocaleString()}株 = {exact(holdingsPnl.collaterals[i])}</Text></View>)}<Text selectable style={s.formula}>現物損益 {exact(holdingsPnl.spot)} ＋ 信用損益 {exact(holdingsPnl.credit)} ＝ {exact(holdingsPnl.total)}</Text><Text style={s.note}>税金・費用控除前の含み損益です。現物の損益に掛目を掛けず、維持率の保証金へ二重に加算しません。</Text></Card>
         <Card title="③ 実質保証金"><Text selectable style={s.formula}>{exact(result.cash)}（現金）{ '\n' }＋ {exact(result.collateralValue)}（代用）{ '\n' }− {exact(result.costs)}（諸経費）{ '\n' }− {exact(result.deduction)}（差引評価損）{ '\n' }＋ ({exact(result.unsettled)})（受渡前決済損益）{ '\n' }＝ {exact(result.effective)}</Text></Card>
         <Card title="④ 維持率"><Text selectable style={s.formula}>{exact(result.effective)} ÷ {exact(result.notional)} × 100{ '\n' }＝ {result.ratio === null ? '未算出' : `${result.ratio}%`}</Text><Text style={s.note}>建玉ゼロなら維持率は定義しません。内部計算は10進数で処理し、表示の維持率だけ小数第2位まで切り捨てます。建単価はSBIの説明に従い小数第3位以下切り捨てです。途中の銘柄別円未満丸めは仮定せず保持しています。</Text></Card>
         <Card title="⑤ 評価益込み維持率（税引後・参考）"><Text selectable style={s.formula}>税金相当額 ＝ max(0, 通算評価損益) × 20.315% ＝ {exact(result.estimatedProfitTax)}{ "\n" }税引後評価損益 ＝ {exact(result.pnl)} − {exact(result.estimatedProfitTax)} ＝ {exact(result.afterTaxPnl)}{ "\n" }評価益込み保証金 ＝ 現金 ＋ 代用評価額 − 諸経費 ＋ 受渡前決済損益 ＋ 税引後評価損益{ "\n" }{exact(result.cash)} ＋ {exact(result.collateralValue)} − {exact(result.costs)} ＋ ({exact(result.unsettled)}) ＋ ({exact(result.afterTaxPnl)}) ＝ {exact(result.profitInclusiveMargin)}{ "\n" }{exact(result.profitInclusiveMargin)} ÷ {exact(result.notional)} × 100 ＝ {result.profitInclusiveRatio === null ? "未算出" : `${result.profitInclusiveRatio}%`}</Text><Text style={s.note}>通算がプラスなら税率20.315%を控除した利益、マイナスなら損失全額を反映します。未決済の含み益に実際に課税した額ではなく、決済時を想定した概算です。年間の損益通算・繰越控除、費用の税務上の控除、税額の端数処理は再現しません。追証・新規建余力の判定には使用しません。</Text></Card><Card title="⑥ 実質レバレッジ（参考）">{result.collaterals.map(c => <Text key={c.id} selectable style={s.formula}>現物 {c.code}: {exact(c.marketPrice)} × {c.quantity.toLocaleString()}株 ＝ {exact(c.marketValue)}（掛目前）</Text>)}{result.positions.map(p => <Text key={p.id} selectable style={s.formula}>信用 {p.code} {p.side === "buy" ? "買建" : "売建"}: {exact(p.price)} × {p.quantity.toLocaleString()}株 ＝ {exact(p.marketValue)}</Text>)}<Text selectable style={s.formula}>総ポジション ＝ 現物時価 ＋ 信用建玉時価{ "\n" }{exact(result.spotMarketValue)} ＋ {exact(result.positionMarketValue)} ＝ {exact(result.totalExposure)}{ "\n" }純資産 ＝ 現金 ＋ 現物時価 − 諸経費 ＋ 受渡前決済損益 ＋ 通算評価損益{ "\n" }{exact(result.cash)} ＋ {exact(result.spotMarketValue)} − {exact(result.costs)} ＋ ({exact(result.unsettled)}) ＋ ({exact(result.pnl)}) ＝ {exact(result.netAssets)}{ "\n" }実質レバレッジ ＝ {exact(result.totalExposure)} ÷ {exact(result.netAssets)} ＝ {result.effectiveLeverage === null ? "未算出" : `${result.effectiveLeverage}倍`}</Text><Text style={s.note}>参考元と同じ、買建・売建を相殺しない総時価による定義です。買いと売りが混在するため、この倍率を一律の株価変動率に掛けても純資産の変化率とは一致しません。現物時価は代用登録分のみで、口座外の資産は含めません。純資産が0以下なら倍率は定義しません。</Text></Card><Card title="公式の説明"><Button title="SBI · 委託保証金率の計算式" secondary onPress={() => void Linking.openURL('https://search.sbisec.co.jp/v2/popwin/help/trade_stock_11_03.html')}/><Button title="SBI · 代用株と信用建余力" secondary onPress={() => void Linking.openURL('https://search.sbisec.co.jp/v2/popwin/help/manage_07_01.html')}/><Button title="SBI · 追証のルール" secondary onPress={() => void Linking.openURL('https://search.sbisec.co.jp/v2/popwin/help/trade_stock_11_04.html')}/><Text style={s.note}>確認日：2026-10-10。受渡日の資金移動・拘束資金・増担保規制・口座固有の条件は別途確認が必要です。表示は終値での試算で、SBIが確定する追証金額とは区別しています。</Text></Card>
@@ -214,7 +226,7 @@ function Main() {
           <Field label="選択中のパターン名" value={patternName} onChange={setPatternName}/><Button title="名前を保存" disabled={demo} onPress={() => {try {const renamed=patternSchema.parse({...active,name:patternName});setSaved(v => ({...v,patterns:v.patterns.map((p,i) => i === v.activePattern ? renamed : p)}));setNotice('パターン名を保存しました');} catch {setNotice('パターン名は1〜30文字で入力してください');}}}/>
         </Card>}
       </View>
-      <Text style={s.footer}>信用デモ取引 · v1.5.2{'\n'}SBI基準の終値シミュレーション</Text>
+      <Text style={s.footer}>信用デモ取引 · v1.5.3{'\n'}SBI基準の終値シミュレーション</Text>
     </ScrollView>
     {editor && <Editor kind={editor.kind} index={editor.index} account={account} snapshot={snapshot} onClose={() => setEditor(null)} onSave={next => { editAccount(next); setEditor(null); }}/ >}
     <Modal visible={deletePrompt !== null} transparent animationType="fade" onRequestClose={() => setDeletePrompt(null)}><View style={s.modalShade}><View style={s.dialog}><Text style={s.cardTitle}>{deletePrompt === 'all' ? '入力をすべて削除しますか' : '入力をJSONの内容で置き換えますか'}</Text><Text style={s.body}>3パターン形式の復元・全削除は全リストが対象です。旧形式の復元は選択中のリストだけが対象です。必要なら先にバックアップしてください。</Text><Button title="実行する" onPress={() => {
@@ -228,6 +240,7 @@ function Editor({ kind, index, account, snapshot, onClose, onSave }: { kind: 'po
   const [code, setCode] = useState(item?.code ?? ''), [name, setName] = useState(item?.name ?? '');
   const [quantity, setQuantity] = useState(item ? String(item.quantity) : '100');
   const [entry, setEntry] = useState(item && 'entry' in item ? item.entry : '');
+  const [purchasePrice, setPurchasePrice] = useState(item && 'purchasePrice' in item ? item.purchasePrice ?? '' : '');
   const [side, setSide] = useState<'buy' | 'sell'>(item && 'side' in item ? item.side : 'buy');
   const [openedOn, setOpenedOn] = useState(item && 'openedOn' in item ? item.openedOn : todayJst());
   const [error, setError] = useState(''), [deleting, setDeleting] = useState(false);
@@ -243,7 +256,7 @@ function Editor({ kind, index, account, snapshot, onClose, onSave }: { kind: 'po
         const next = positionSchema.parse({ ...base, entry, side, openedOn });
         onSave({ ...account, positions: index === null ? [...account.positions, next] : account.positions.map((p, i) => i === index ? next : p) });
       } else {
-        const next = collateralSchema.parse({ ...base, haircut: '80' });
+        const next = collateralSchema.parse({ ...base, haircut: '80', purchasePrice: purchasePrice || undefined });
         onSave({ ...account, collaterals: index === null ? [...account.collaterals, next] : account.collaterals.map((c, i) => i === index ? next : c) });
       }
     } catch (e) { setError(e instanceof Error && !e.message.startsWith('[') ? e.message : 'コード4桁、株数、建値、日付を確認してください'); }
@@ -255,7 +268,7 @@ function Editor({ kind, index, account, snapshot, onClose, onSave }: { kind: 'po
     <Text style={s.note}>終値の接続前でも東証銘柄名で検索できます。地方単独上場・新規上場など、一覧にない銘柄は直接入力できます。</Text>
     <Field label="銘柄コード" value={code} onChange={v => setCode(v.normalize('NFKC').toUpperCase())} placeholder="7203 / 285A"/><Field label="銘柄名（任意）" value={name} onChange={setName}/><Field label="株数" numeric value={quantity} onChange={setQuantity}/>
 
-    {kind === 'position' ? <><View style={s.chips}><Button title="買建" secondary={side !== 'buy'} onPress={() => setSide('buy')}/><Button title="売建" secondary={side !== 'sell'} onPress={() => setSide('sell')}/></View><Field label="建値（円）" numeric value={entry} onChange={setEntry}/><Field label="建日（YYYY-MM-DD）" value={openedOn} onChange={setOpenedOn}/></> : null}
+    {kind === 'position' ? <><View style={s.chips}><Button title="買建" secondary={side !== 'buy'} onPress={() => setSide('buy')}/><Button title="売建" secondary={side !== 'sell'} onPress={() => setSide('sell')}/></View><Field label="建値（円）" numeric value={entry} onChange={setEntry}/><Field label="建日（YYYY-MM-DD）" value={openedOn} onChange={setOpenedOn}/></> : <Field label="購入単価（円）" numeric value={purchasePrice} onChange={setPurchasePrice} placeholder="評価損益の計算に使用"/>}
     <Text style={s.note}>分割・併合があった場合は処理後の株数・建値を入力してください。「確認して保存」で今日までの権利処理を確認したこととして記録します。</Text>{error !== '' && <Text style={s.error}>{error}</Text>}<Button title="確認して保存" onPress={save}/>{index !== null && <><Button title="この登録を削除" secondary onPress={() => setDeleting(true)}/>{deleting && <View style={s.warning}><Text style={s.body}>この登録を削除しますか？</Text><Button title="削除を実行" onPress={() => onSave(kind === 'position' ? { ...account, positions: account.positions.filter((_, i) => i !== index) } : { ...account, collaterals: account.collaterals.filter((_, i) => i !== index) })}/><Button title="キャンセル" secondary onPress={() => setDeleting(false)}/></View>}</>}
   </ScrollView></KeyboardAvoidingView></SafeAreaView></Modal>;
 }

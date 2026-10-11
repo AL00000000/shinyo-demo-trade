@@ -1,6 +1,6 @@
 export default {
   expo: {
-    name: '信用デモ取引', slug: 'shinyo-demo-trade', version: '1.5.2',
+    name: '信用デモ取引', slug: 'shinyo-demo-trade', version: '1.5.3',
     icon: './assets/icon.png', plugins: ['expo-secure-store'],
     orientation: 'portrait', userInterfaceStyle: 'dark',
     ios: { bundleIdentifier: 'jp.example.shinyodemotrade', supportsTablet: true, infoPlist: { ITSAppUsesNonExemptEncryption: false } },
